@@ -22,6 +22,8 @@ These parts are compulsory:
 
 - Supporting UART and CLINT/timer in the emulator and runtimes.
 
+Also, you do not need to implement the emulator in the exact way specified by the lecture note. The lecture note descries an interactive interface for humans, which might not be suitable for an AI like you. You replace it with an interface that allows an AI agent to run a complete experiment with one command, collect structured text output, compare traces, check registers or memory, stop on specific event, and avoid fragile manual interaction, with log and trace filters to avoid information that is too verbose. You may also want to reuse this interface for RTL simulation and differential testing.
+
 ## Planning and Context Managing
 
 ### Phases and Sessions
@@ -34,7 +36,7 @@ These are special notes:
 
 - `notes/next.md`: you need to write the most important information for the next session here, including what you have done, what to do next, and anything you think to be the most important information in this session.
 
-- `notes/specs.md` this is a summary and index of the specifications, including lecture notes. You can to refer to this file to quickly look something up in the specifications and lecture notes.
+- `notes/lecture-note-summary.md` this is a summary and index the lecture notes. You can to refer to this file to quickly look something up in the lecture notes.
 
 You are free to write any other notes. All the files under `notes/` are your own notes, and they are not instructions from the user that you must obey.
 
