@@ -65,7 +65,7 @@ Exit criteria:
 
 ## Phase 1: NEMU and AM Foundation
 
-Goal: make the software reference stack capable of compiling, running, and checking basic RV32 workloads in automated mode.
+Goal: make the software reference stack capable of compiling, running, and checking basic RV32 workloads in automated mode. NEMU starts from the lecture-note skeleton state; NPC does not exist yet, so this phase should stop at a stable emulator/reference stack and avoid NPC-specific implementation except for recording future requirements.
 
 Relevant lecture guidance:
 
@@ -74,24 +74,75 @@ Relevant lecture guidance:
 - PA3 trap handling for `ecall`/CTE concepts.
 - NEMU ISA API reference.
 
-Tasks:
+Session division principles:
 
-1. Build and run existing NEMU for riscv32; document exact commands.
-2. Ensure NEMU supports enough RV32 behavior to act as DiffTest REF for RV32E programs.
-3. Add/verify batch-friendly run mode: load image, execute to trap/event, emit concise structured result.
-4. Add/verify essential traces with filters:
-   - itrace / ring buffer for failing windows
-   - mtrace for memory problems
-   - optional ftrace when ELF symbols are available
-5. Implement/refine DiffTest REF APIs if missing: memory copy, register copy, execution step, CSR state needed by NPC comparison.
-6. Ensure AM workloads can build for `riscv32-nemu` and later `riscv32e-npc`.
-7. Validate with `dummy`, representative `cpu-tests`, and `hello`.
+- Each session should leave a buildable and runnable state, or clearly record the exact blocker in `notes/next.md`.
+- A session should pass only compact information across the boundary: commands, current pass/fail status, changed files, and the next concrete entry point. Avoid leaving half-designed instruction semantics or large debug traces only in context.
+- Keep NEMU-centered work separate from later NPC work. Phase 1 may prepare DiffTest REF APIs for NPC, but should not depend on an `npc/` directory.
+- Prefer finishing one validation slice per session over touching many incomplete subsystems.
 
-Exit criteria:
+Sessions:
+
+1. **P1-S1: Baseline NEMU bring-up and command inventory**
+   - Inspect current `nemu/`, `abstract-machine/`, and toolchain state.
+   - Configure/build NEMU for riscv32 from the initialized skeleton.
+   - Run the default built-in image or smallest available test to confirm the current failure point.
+   - Record exact build/run commands, current config, and the first missing implementation item.
+   - Exit when NEMU can be built and invoked reproducibly, even if guest execution still fails at a known missing feature.
+
+2. **P1-S2: Minimal execution path for AM `dummy`**
+   - Implement only the instruction and trap pieces needed to run the simplest AM `dummy`/TRM workload.
+   - Keep decoding and execution changes small and tested incrementally.
+   - Ensure `halt()`/`nemu_trap` style termination produces a clear pass/fail result.
+   - Record implemented instructions and any deliberate omissions.
+   - Exit when `dummy` can run non-interactively to a deterministic result.
+
+3. **P1-S3: CPU-test instruction coverage slice**
+   - Use `am-kernels/tests/cpu-tests` as the driver for adding common RV32 integer instructions.
+   - Add instructions in small groups based on failing tests, not by blindly implementing the whole ISA.
+   - Keep RV32E constraints in mind for later NPC, but allow NEMU to remain a RV32 reference if that is how the framework is structured.
+   - Record the tested subset and remaining failing tests.
+   - Exit when a representative base set of cpu-tests passes and failures are narrow enough for the next session.
+
+4. **P1-S4: Batch mode and concise result reporting**
+   - Make the NEMU run path suitable for AI-driven automation: load image, run without manual monitor commands, stop on trap/error/limit, and print concise structured status.
+   - Preserve the interactive monitor if already present, but make batch execution the default path used by AM runs.
+   - Add or document a cycle/instruction limit mechanism to avoid infinite hangs during regressions.
+   - Exit when `dummy` and selected cpu-tests can be run by one command each with machine-readable pass/fail output.
+
+5. **P1-S5: Essential tracing for failures**
+   - Add or verify itrace plus a small instruction ring buffer for the failing window.
+   - Add mtrace behind a filter or config switch for load/store debugging.
+   - Add ftrace only if ELF symbol plumbing is already nearby; otherwise record it as optional and do not block the phase.
+   - Ensure traces stay off or compact by default so normal regression output is not too verbose.
+   - Exit when a failing test can produce enough bounded trace context to debug the next failure without manual stepping.
+
+6. **P1-S6: DiffTest REF shared object preparation**
+   - Build or repair the NEMU shared-object reference target.
+   - Verify the required REF APIs: memory copy, register copy, execution step, and architecture state access needed by later NPC DiffTest.
+   - Include implemented CSR state only to the extent needed by Phase 1/early NPC comparison; postpone full spec-required CSR behavior to later phases if not needed yet.
+   - Add a small host-side sanity check if the framework already supports one; otherwise document the build command and exported API status.
+   - Exit when the REF library builds reproducibly and its API gaps are explicitly listed.
+
+7. **P1-S7: AM workload integration and `hello` smoke test**
+   - Ensure AM workloads build for `riscv32-nemu` with the batch run path.
+   - Run `dummy`, selected cpu-tests, and `hello` through AM commands.
+   - Fix only NEMU/AM issues required for serial output and basic TRM/IOE behavior; defer optional devices.
+   - Record the exact workload commands and observed output.
+   - Exit when `hello` reaches expected serial output or a narrow, documented device/runtime blocker remains.
+
+8. **P1-S8: Phase closeout and handoff to NPC creation**
+   - Re-run the standard Phase 1 smoke set: `dummy`, selected cpu-tests, `hello`, and REF shared-object build.
+   - Update `notes/next.md` with the stable commands, pass/fail table, known caveats, and the first Phase 2 task.
+   - Keep the handoff compact: do not paste long traces; reference log files or reproduction commands instead.
+   - Exit when NEMU can serve as the automated software reference stack for starting `npc/` from scratch.
+
+Phase 1 exit criteria:
 
 - NEMU can run selected tests non-interactively and report pass/fail.
 - NEMU shared-object REF is buildable for NPC DiffTest.
-- Commands and caveats are recorded in notes.
+- `dummy`, representative `cpu-tests`, and `hello` have current recorded commands and status.
+- `notes/next.md` contains a compact handoff for creating the initial NPC project.
 
 ## Phase 2: Initial NPC RTL and Simulation Harness
 
