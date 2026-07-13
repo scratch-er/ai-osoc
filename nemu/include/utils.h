@@ -31,6 +31,12 @@ typedef struct {
 extern NEMUState nemu_state;
 extern uint64_t nemu_inst_limit;
 
+// ----------- trace -----------
+
+IFDEF(CONFIG_IQUEUE, void trace_inst_record(const char *logbuf));
+IFDEF(CONFIG_IQUEUE, void trace_inst_dump(void));
+IFDEF(CONFIG_MTRACE, bool mtrace_enabled(paddr_t addr));
+
 // ----------- timer -----------
 
 uint64_t get_time();
@@ -62,6 +68,16 @@ uint64_t get_time();
     extern FILE* log_fp; \
     extern bool log_enable(); \
     if (log_enable() && log_fp != NULL) { \
+      fprintf(log_fp, __VA_ARGS__); \
+      fflush(log_fp); \
+    } \
+  } while (0) \
+)
+
+#define log_write_force(...) IFDEF(CONFIG_TARGET_NATIVE_ELF, \
+  do { \
+    extern FILE* log_fp; \
+    if (log_fp != NULL) { \
       fprintf(log_fp, __VA_ARGS__); \
       fflush(log_fp); \
     } \

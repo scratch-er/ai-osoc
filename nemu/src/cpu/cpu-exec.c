@@ -33,6 +33,9 @@ static bool g_print_step = false;
 void device_update();
 
 static void trace_and_difftest(Decode *_this, vaddr_t dnpc) {
+#ifdef CONFIG_IQUEUE
+  trace_inst_record(_this->logbuf);
+#endif
 #ifdef CONFIG_ITRACE_COND
   if (ITRACE_COND) { log_write("%s\n", _this->logbuf); }
 #endif
@@ -45,7 +48,7 @@ static void exec_once(Decode *s, vaddr_t pc) {
   s->snpc = pc;
   isa_exec_once(s);
   cpu.pc = s->dnpc;
-#ifdef CONFIG_ITRACE
+#if defined(CONFIG_ITRACE) || defined(CONFIG_IQUEUE)
   char *p = s->logbuf;
   p += snprintf(p, sizeof(s->logbuf), FMT_WORD ":", s->pc);
   int ilen = s->snpc - s->pc;
@@ -116,6 +119,7 @@ static void report_result() {
 
 void assert_fail_msg() {
   isa_reg_display();
+  IFDEF(CONFIG_IQUEUE, trace_inst_dump());
   statistic();
 }
 
@@ -145,11 +149,15 @@ void cpu_exec(uint64_t n) {
            (nemu_state.halt_ret == 0 ? ANSI_FMT("HIT GOOD TRAP", ANSI_FG_GREEN) :
             ANSI_FMT("HIT BAD TRAP", ANSI_FG_RED))),
           nemu_state.halt_pc);
+      if (nemu_state.state == NEMU_ABORT || nemu_state.halt_ret != 0) {
+        IFDEF(CONFIG_IQUEUE, trace_inst_dump());
+      }
       statistic();
       report_result();
       break;
     case NEMU_LIMIT:
       Log("nemu: instruction limit reached at pc = " FMT_WORD, nemu_state.halt_pc);
+      IFDEF(CONFIG_IQUEUE, trace_inst_dump());
       statistic();
       report_result();
       break;

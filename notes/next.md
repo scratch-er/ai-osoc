@@ -6,6 +6,7 @@ Current state:
 - Phase 1 Session 2 (`P1-S2: Minimal execution path for AM dummy`) is complete.
 - Phase 1 Session 3 (`P1-S3: CPU-test instruction coverage slice`) is complete: the representative RV32I cpu-test slice passes and remaining failures are M-extension/device blockers.
 - Phase 1 Session 4 (`P1-S4: Batch mode and concise result reporting`) is complete.
+- Phase 1 Session 5 (`P1-S5: Essential tracing for failures`) is complete.
 - `npc/` is absent; no NPC work has started.
 - Repository status before Phase 1 work already had modified `notes/plan.md` and `notes/next.md`, plus untracked `.DS_Store` and `activate`.
 
@@ -23,6 +24,9 @@ NEMU/AM current configuration:
   - `# CONFIG_TARGET_AM is not set`
   - `# CONFIG_DEVICE is not set`
   - `# CONFIG_TRACE is not set`
+  - `CONFIG_IQUEUE=y`
+  - `CONFIG_IQUEUE_SIZE=16`
+  - `# CONFIG_MTRACE is not set`
   - `CONFIG_MBASE=0x80000000`
   - `CONFIG_MSIZE=0x2000000`
 - Devices remain disabled because native device build on this macOS environment failed on missing `SDL2/SDL.h`.
@@ -88,6 +92,28 @@ Changes made in Phase 1 Session 4:
   - Added `NEMU_MAX_INSTS ?= 10000000`.
   - AM `run` now passes `--max-insts=$(NEMU_MAX_INSTS)` together with existing batch/log flags.
 
+Changes made in Phase 1 Session 5:
+
+- `nemu/Kconfig`
+  - Added `CONFIG_IQUEUE` and `CONFIG_IQUEUE_SIZE` for a recent-instruction ring buffer.
+  - Added `CONFIG_MTRACE`, `CONFIG_MTRACE_START`, and `CONFIG_MTRACE_END` for address-filtered memory tracing.
+- `nemu/include/cpu/decode.h`
+  - Keeps `Decode.logbuf` when either `CONFIG_ITRACE` or `CONFIG_IQUEUE` is enabled.
+- `nemu/include/utils.h`
+  - Declared instruction queue and mtrace helpers.
+  - Added `log_write_force()` so opt-in mtrace can write even when global `CONFIG_TRACE` is off.
+- `nemu/src/utils/state.c`
+  - Added a bounded recent-instruction ring buffer with `trace_inst_record()` and `trace_inst_dump()`.
+  - Added `mtrace_enabled()` address filtering.
+- `nemu/src/cpu/cpu-exec.c`
+  - Records each decoded instruction into the ring buffer.
+  - Dumps `NEMU recent instructions:` only on `NEMU_ABORT`, bad trap, assertion failure, or instruction limit.
+  - Normal passing regressions still print only the existing concise status/result output.
+- `nemu/src/monitor/monitor.c`
+  - Initializes the disassembler when either `ITRACE` or `IQUEUE` is enabled.
+- `nemu/src/memory/paddr.c`
+  - Emits opt-in `MTRACE r/w pc=<pc> addr=<addr> len=<n> data=<data>` lines for filtered physical-memory/MMIO accesses when `CONFIG_MTRACE=y`.
+
 Validated commands and results:
 
 1. Build native NEMU and run the built-in image with an explicit limit:
@@ -104,16 +130,19 @@ Validated commands and results:
    NEMU_RESULT status=good state=2 halt_pc=0x8000000c halt_ret=0 insts=4 limit=100
    ```
 
-2. Verify instruction-limit failure path:
+2. Verify instruction-limit failure path and bounded recent instruction dump:
 
    ```sh
    cd nemu
    ./build/riscv32-nemu-interpreter --batch --max-insts=2
    ```
 
-   Result: exits nonzero as expected; final structured line:
+   Result: exits nonzero as expected; output includes:
 
    ```text
+   NEMU recent instructions:
+         0x80000000: 00 00 02 97 auipc	t0, 0
+     --> 0x80000004: 00 02 88 23 sb	zero, 0x10(t0)
    NEMU_RESULT status=limit state=5 halt_pc=0x80000008 halt_ret=1 insts=2 limit=2
    ```
 
@@ -135,8 +164,49 @@ Validated commands and results:
 
    Result: all 22 listed tests pass with `NEMU_RESULT status=good` and AM default `limit=10000000`.
 
+4. Failing-window check with an expected M-extension failure:
+
+   ```sh
+   source ./activate
+   cd am-kernels/tests/cpu-tests
+   printf 'NAME = %s\nSRCS = tests/%s.c\ninclude %s/Makefile\n' div div "$AM_HOME" > Makefile.div
+   out=$(make -f Makefile.div ARCH=riscv32-nemu CROSS_COMPILE=riscv64-elf- run 2>&1)
+   status=$?
+   rm -f Makefile.div
+   printf '%s\n' "$out" | grep -E 'NEMU_RESULT status=abort|NEMU recent instructions' | tail -20
+   ```
+
+   Result: expected failure still exits nonzero and includes `NEMU recent instructions:` plus:
+
+   ```text
+   NEMU_RESULT status=abort state=3 halt_pc=0x8000007c halt_ret=4294967295 insts=67 limit=10000000
+   ```
+
+5. Temporary `CONFIG_MTRACE=y` compile/run check:
+
+   - Temporarily set in `nemu/.config`:
+     - `CONFIG_MTRACE=y`
+     - `CONFIG_MTRACE_START=0x80000000`
+     - `CONFIG_MTRACE_END=0x800000ff`
+   - Ran `tools/kconfig/build/conf -s --syncconfig Kconfig`, rebuilt, then:
+
+     ```sh
+     ./build/riscv32-nemu-interpreter --batch --max-insts=2 --log=/tmp/nemu-mtrace.log
+     ```
+
+   - Result: mtrace lines appeared in `/tmp/nemu-mtrace.log`, for example:
+
+     ```text
+     MTRACE r pc=0x80000000 addr=0x80000000 len=4 data=0x00000297
+     MTRACE r pc=0x80000004 addr=0x80000004 len=4 data=0x00028823
+     MTRACE w pc=0x80000004 addr=0x80000010 len=1 data=0x00000000
+     ```
+
+   - Restored the default local config afterward (`CONFIG_IQUEUE=y`, `CONFIG_MTRACE` off).
+
 Known caveats:
 
+- `CONFIG_IQUEUE=y` builds Capstone under `nemu/tools/capstone/repo/` if not already present, because the ring buffer stores disassembled instruction strings. This directory is ignored/generated tooling.
 - The `am-kernels/tests/cpu-tests` wrapper command still fails on macOS:
 
   ```sh
@@ -156,10 +226,10 @@ Known caveats:
 
 Next work:
 
-1. Start Phase 1 Session 5 (`P1-S5: Essential tracing for failures`).
-2. Add or verify bounded itrace/failing-window support so a failing test can print compact recent instruction context.
-3. Add mtrace only behind a filter/config switch; keep normal regression output concise by default.
-4. Consider ftrace optional only if ELF symbol plumbing is nearby; do not block P1-S5 on it.
+1. Start Phase 1 Session 6 (`P1-S6: DiffTest REF shared object preparation`).
+2. Build or repair the NEMU shared-object reference target.
+3. Verify REF APIs for memory copy, register copy, execution step, and architecture state access needed by later NPC DiffTest.
+4. Keep CSR additions minimal unless required by the REF API sanity check.
 5. Do not start M-extension implementation unless explicitly choosing to broaden `riscv32-nemu` beyond the RV32I-focused slice; the future target core remains RV32E_Zicsr.
 6. Do not touch `am-kernels/` unless the user explicitly approves fixing its macOS wrapper.
 
@@ -172,11 +242,14 @@ Relevant files:
 - `specs/riscv-isa-manual/src/unpriv/rv32.adoc`
 - `specs/riscv-isa-manual/src/unpriv/rv32e.adoc`
 - `nemu/.config` (generated/ignored local build config)
+- `nemu/Kconfig`
 - `nemu/include/utils.h`
+- `nemu/include/cpu/decode.h`
 - `nemu/src/utils/state.c`
 - `nemu/src/monitor/monitor.c`
 - `nemu/src/monitor/sdb/sdb.c`
 - `nemu/src/cpu/cpu-exec.c`
+- `nemu/src/memory/paddr.c`
 - `nemu/src/isa/riscv32/inst.c`
 - `nemu/src/isa/riscv32/init.c`
 - `abstract-machine/Makefile`

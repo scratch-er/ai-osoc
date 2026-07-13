@@ -151,6 +151,31 @@ config ITRACE_COND
   string "Only trace instructions when the condition is true"
   default "true"
 
+config IQUEUE
+  depends on TARGET_NATIVE_ELF && ENGINE_INTERPRETER
+  bool "Enable recent instruction ring buffer"
+  default y
+
+config IQUEUE_SIZE
+  depends on IQUEUE
+  int "Recent instruction ring buffer size"
+  default 16
+
+config MTRACE
+  depends on TARGET_NATIVE_ELF
+  bool "Enable memory access tracer"
+  default n
+
+config MTRACE_START
+  depends on MTRACE
+  hex "Start address for memory tracing"
+  default 0x0
+
+config MTRACE_END
+  depends on MTRACE
+  hex "End address for memory tracing"
+  default 0xffffffff
+
 
 config DIFFTEST
   depends on TARGET_NATIVE_ELF
