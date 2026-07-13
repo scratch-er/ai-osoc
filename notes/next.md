@@ -4,7 +4,7 @@ Current state:
 
 - Phase 1 Session 1 (`P1-S1: Baseline NEMU bring-up and command inventory`) is complete.
 - Phase 1 Session 2 (`P1-S2: Minimal execution path for AM dummy`) is complete.
-- Phase 1 Session 3 (`P1-S3: CPU-test instruction coverage slice`) has started and now has a small passing cpu-test slice.
+- Phase 1 Session 3 (`P1-S3: CPU-test instruction coverage slice`) is complete: the representative RV32I cpu-test slice passes and remaining failures are M-extension/device blockers.
 - `npc/` is absent; no NPC work has started.
 - Repository status before Phase 1 work already had modified `notes/plan.md` and `notes/next.md`, plus untracked `.DS_Store` and `activate`.
 
@@ -57,10 +57,11 @@ Changes made so far in Phase 1 Session 3:
   - Added operand decode for B-type and R-type.
   - Added B-type immediate decode.
   - Added RV32I instructions needed by the current cpu-test slice:
-    - I-type/immediate: `sltiu`, `xori`, `andi`, `slli`, `srli`, `srai`
-    - loads/stores: `lw`, `sh`
-    - R-type: `add`, `sub`, `sll`, `srl`, `sra`, `sltu`, `xor`, `or`, `and`
-    - branches: `beq`, `bne`
+    - U-type: `lui`, `auipc`
+    - I-type/immediate: `addi`, `slti`, `sltiu`, `xori`, `ori`, `andi`, `slli`, `srli`, `srai`
+    - loads/stores: `lb`, `lh`, `lw`, `lbu`, `lhu`, `sb`, `sh`, `sw`
+    - R-type: `add`, `sub`, `sll`, `slt`, `srl`, `sra`, `sltu`, `xor`, `or`, `and`
+    - branches: `beq`, `bne`, `blt`, `bge`, `bltu`, `bgeu`
 - Added `notes/nemu-rv32i-instruction-notes.md` with instruction encodings, behavior, RISC-V manual references, passing-test command pattern, and next target.
 
 Validated commands and results:
@@ -101,7 +102,7 @@ Validated commands and results:
    make -C nemu -j$(sysctl -n hw.ncpu)
    source ./activate
    cd am-kernels/tests/cpu-tests
-   for t in add add-longlong bit shift; do
+   for t in dummy add add-longlong bit bubble-sort crc32 fib if-else load-store max min3 mov-c movsx pascal quick-sort select-sort shift sub-longlong sum switch to-lower-case unalign; do
      printf 'NAME = %s\nSRCS = tests/%s.c\ninclude %s/Makefile\n' "$t" "$t" "$AM_HOME" > Makefile.$t
      make -f Makefile.$t ARCH=riscv32-nemu CROSS_COMPILE=riscv64-elf- run
      status=$?
@@ -110,7 +111,7 @@ Validated commands and results:
    done
    ```
 
-   Result: all four pass with `HIT GOOD TRAP`.
+   Result: all 22 listed tests pass with `HIT GOOD TRAP`.
 
 Known caveats:
 
@@ -123,18 +124,21 @@ Known caveats:
 
   It reports `[dummy] ***FAIL***` because the wrapper uses `/bin/echo -e` to generate `Makefile.$test`; macOS `/bin/echo` writes the literal `-e`, producing an invalid makefile. Do not modify `am-kernels/` unless explicitly allowed; use the temporary `printf` command above for now, or fix the wrapper later if the user permits changing `am-kernels`.
 
-- NEMU is still far from full RV32 coverage. The currently validated cpu-tests are only `dummy`, `add`, `add-longlong`, `bit`, and `shift`.
+- P1-S3 broad survey result after the RV32I slice:
+  - Passing: `dummy`, `add`, `add-longlong`, `bit`, `bubble-sort`, `crc32`, `fib`, `if-else`, `load-store`, `max`, `min3`, `mov-c`, `movsx`, `pascal`, `quick-sort`, `select-sort`, `shift`, `sub-longlong`, `sum`, `switch`, `to-lower-case`, `unalign`.
+  - Failing on M-extension opcodes from current `-march=rv32im_zicsr`: `div`, `fact`, `goldbach`, `leap-year`, `matrix-mul`, `mersenne`, `mul-longlong`, `narcissistic`, `prime`, `recursion`, `wanshu`.
+  - Failing on disabled serial MMIO at `0xa00003f8`: `hello-str`, `string`.
 - `abstract-machine/scripts/riscv32-nemu.mk` still defaults `CROSS_COMPILE := riscv64-linux-gnu-`; continue passing `CROSS_COMPILE=riscv64-elf-` unless the toolchain/default is changed.
 - Devices are still disabled; serial/timer work should wait until the relevant Phase 1/AM workload sessions, or until SDL2/device strategy is decided.
 
 Next work:
 
-1. Continue Phase 1 Session 3 (`P1-S3: CPU-test instruction coverage slice`).
-2. Use one small CPU test at a time with the temporary `printf` makefile pattern; likely next targets are `load-store` or `mov-c`.
-3. Do not postpone `ecall` until Phase 3: implement/verify the NEMU M-mode `ecall` path before AM workloads that need traps, and bring a minimal NPC `ecall`/`mret` CSR path into Phase 2 if early AM workload bring-up requires it.
-4. For each failure, inspect `build/<test>-riscv32-nemu.txt`, add only the missing instruction(s), rebuild NEMU, and rerun that test plus the current passing slice.
-5. Keep `notes/nemu-rv32i-instruction-notes.md` updated with instruction encodings/behavior and passing tests.
-6. Avoid touching `am-kernels/` unless the user explicitly approves fixing its macOS wrapper.
+1. Start Phase 1 Session 4 (`P1-S4: Batch mode and concise result reporting`).
+2. Add or document a run limit mechanism so regressions cannot hang indefinitely.
+3. Make normal batch output concise and machine-readable enough for automated pass/fail parsing.
+4. Keep the interactive monitor path available, but keep AM `run` using batch mode.
+5. Do not start M-extension implementation unless explicitly choosing to broaden `riscv32-nemu` beyond the RV32I-focused P1-S3 slice; the future target core remains RV32E_Zicsr.
+6. Do not touch `am-kernels/` unless the user explicitly approves fixing its macOS wrapper.
 
 Relevant files:
 
