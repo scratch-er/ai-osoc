@@ -20,7 +20,7 @@
 
 // ----------- state -----------
 
-enum { NEMU_RUNNING, NEMU_STOP, NEMU_END, NEMU_ABORT, NEMU_QUIT };
+enum { NEMU_RUNNING, NEMU_STOP, NEMU_END, NEMU_ABORT, NEMU_QUIT, NEMU_LIMIT };
 
 typedef struct {
   int state;
@@ -29,6 +29,7 @@ typedef struct {
 } NEMUState;
 
 extern NEMUState nemu_state;
+extern uint64_t nemu_inst_limit;
 
 // ----------- timer -----------
 

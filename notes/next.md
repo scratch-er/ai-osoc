@@ -5,6 +5,7 @@ Current state:
 - Phase 1 Session 1 (`P1-S1: Baseline NEMU bring-up and command inventory`) is complete.
 - Phase 1 Session 2 (`P1-S2: Minimal execution path for AM dummy`) is complete.
 - Phase 1 Session 3 (`P1-S3: CPU-test instruction coverage slice`) is complete: the representative RV32I cpu-test slice passes and remaining failures are M-extension/device blockers.
+- Phase 1 Session 4 (`P1-S4: Batch mode and concise result reporting`) is complete.
 - `npc/` is absent; no NPC work has started.
 - Repository status before Phase 1 work already had modified `notes/plan.md` and `notes/next.md`, plus untracked `.DS_Store` and `activate`.
 
@@ -51,12 +52,12 @@ Changes made in Phase 1 Session 2:
   - Added `-b` to `NEMUFLAGS` so AM `run` invokes NEMU in batch mode.
   - Changed `python` to `python3` for `insert-arg.py` on this macOS environment.
 
-Changes made so far in Phase 1 Session 3:
+Changes made in Phase 1 Session 3:
 
 - `nemu/src/isa/riscv32/inst.c`
   - Added operand decode for B-type and R-type.
   - Added B-type immediate decode.
-  - Added RV32I instructions needed by the current cpu-test slice:
+  - Added RV32I instructions needed by the cpu-test slice:
     - U-type: `lui`, `auipc`
     - I-type/immediate: `addi`, `slti`, `sltiu`, `xori`, `ori`, `andi`, `slli`, `srli`, `srai`
     - loads/stores: `lb`, `lh`, `lw`, `lbu`, `lhu`, `sb`, `sh`, `sw`
@@ -64,54 +65,75 @@ Changes made so far in Phase 1 Session 3:
     - branches: `beq`, `bne`, `blt`, `bge`, `bltu`, `bgeu`
 - Added `notes/nemu-rv32i-instruction-notes.md` with instruction encodings, behavior, RISC-V manual references, passing-test command pattern, and next target.
 
+Changes made in Phase 1 Session 4:
+
+- `nemu/include/utils.h`
+  - Added `NEMU_LIMIT` state.
+  - Declared global `nemu_inst_limit`.
+- `nemu/src/utils/state.c`
+  - Defined `nemu_inst_limit`, defaulting to `0` for unlimited execution.
+- `nemu/src/monitor/monitor.c`
+  - Added CLI option `-m N` / `--max-insts=N`.
+  - Help text documents that `0` means unlimited.
+- `nemu/src/cpu/cpu-exec.c`
+  - Checks `nemu_inst_limit` before each guest instruction and stops with `NEMU_LIMIT` when reached.
+  - Prints a stable machine-readable result line after terminal outcomes:
+
+    ```text
+    NEMU_RESULT status=<good|bad|abort|quit|limit|stop|running> state=<n> halt_pc=<hex> halt_ret=<n> insts=<n> limit=<n>
+    ```
+
+  - Existing human-readable `HIT GOOD TRAP` / `HIT BAD TRAP` logs are preserved.
+- `abstract-machine/scripts/platform/nemu.mk`
+  - Added `NEMU_MAX_INSTS ?= 10000000`.
+  - AM `run` now passes `--max-insts=$(NEMU_MAX_INSTS)` together with existing batch/log flags.
+
 Validated commands and results:
 
-1. Build native NEMU:
+1. Build native NEMU and run the built-in image with an explicit limit:
 
    ```sh
    cd nemu
    make -j$(sysctl -n hw.ncpu)
+   ./build/riscv32-nemu-interpreter --batch --max-insts=100
    ```
 
-   Result: passes, target `nemu/build/riscv32-nemu-interpreter` is built.
+   Result: passes with `HIT GOOD TRAP`; final structured line:
 
-2. Run NEMU built-in image:
+   ```text
+   NEMU_RESULT status=good state=2 halt_pc=0x8000000c halt_ret=0 insts=4 limit=100
+   ```
+
+2. Verify instruction-limit failure path:
 
    ```sh
    cd nemu
-   ./build/riscv32-nemu-interpreter --batch
+   ./build/riscv32-nemu-interpreter --batch --max-insts=2
    ```
 
-   Result from Phase 1 Session 2: `HIT GOOD TRAP` at `pc = 0x8000000c`, total guest instructions `4`.
+   Result: exits nonzero as expected; final structured line:
 
-3. Build and run AM `dummy` directly with a temporary generated makefile:
-
-   ```sh
-   source ./activate
-   cd am-kernels/tests/cpu-tests
-   printf 'NAME = dummy\nSRCS = tests/dummy.c\ninclude %s/Makefile\n' "$AM_HOME" > Makefile.dummy
-   make -f Makefile.dummy ARCH=riscv32-nemu CROSS_COMPILE=riscv64-elf- run
-   rm -f Makefile.dummy
+   ```text
+   NEMU_RESULT status=limit state=5 halt_pc=0x80000008 halt_ret=1 insts=2 limit=2
    ```
 
-   Result from Phase 1 Session 2: `HIT GOOD TRAP` at `pc = 0x80000030`, total guest instructions `13`.
-
-4. Current Phase 1 Session 3 cpu-test slice:
+3. Current cpu-test slice, checking `NEMU_RESULT status=good` for each test:
 
    ```sh
-   make -C nemu -j$(sysctl -n hw.ncpu)
    source ./activate
    cd am-kernels/tests/cpu-tests
    for t in dummy add add-longlong bit bubble-sort crc32 fib if-else load-store max min3 mov-c movsx pascal quick-sort select-sort shift sub-longlong sum switch to-lower-case unalign; do
      printf 'NAME = %s\nSRCS = tests/%s.c\ninclude %s/Makefile\n' "$t" "$t" "$AM_HOME" > Makefile.$t
-     make -f Makefile.$t ARCH=riscv32-nemu CROSS_COMPILE=riscv64-elf- run
+     out=$(make -f Makefile.$t ARCH=riscv32-nemu CROSS_COMPILE=riscv64-elf- run 2>&1)
      status=$?
      rm -f Makefile.$t
+     printf '%s\n' "$out" | grep 'NEMU_RESULT status=good' >/dev/null || { printf '%s\n' "$out"; exit 1; }
+     printf '%s PASS %s\n' "$t" "$(printf '%s\n' "$out" | grep 'NEMU_RESULT' | tail -1)"
      [ $status -eq 0 ] || exit $status
    done
    ```
 
-   Result: all 22 listed tests pass with `HIT GOOD TRAP`.
+   Result: all 22 listed tests pass with `NEMU_RESULT status=good` and AM default `limit=10000000`.
 
 Known caveats:
 
@@ -130,14 +152,15 @@ Known caveats:
   - Failing on disabled serial MMIO at `0xa00003f8`: `hello-str`, `string`.
 - `abstract-machine/scripts/riscv32-nemu.mk` still defaults `CROSS_COMPILE := riscv64-linux-gnu-`; continue passing `CROSS_COMPILE=riscv64-elf-` unless the toolchain/default is changed.
 - Devices are still disabled; serial/timer work should wait until the relevant Phase 1/AM workload sessions, or until SDL2/device strategy is decided.
+- `--max-insts` counts global guest instructions since process start. That is fine for current one-image one-run invocations.
 
 Next work:
 
-1. Start Phase 1 Session 4 (`P1-S4: Batch mode and concise result reporting`).
-2. Add or document a run limit mechanism so regressions cannot hang indefinitely.
-3. Make normal batch output concise and machine-readable enough for automated pass/fail parsing.
-4. Keep the interactive monitor path available, but keep AM `run` using batch mode.
-5. Do not start M-extension implementation unless explicitly choosing to broaden `riscv32-nemu` beyond the RV32I-focused P1-S3 slice; the future target core remains RV32E_Zicsr.
+1. Start Phase 1 Session 5 (`P1-S5: Essential tracing for failures`).
+2. Add or verify bounded itrace/failing-window support so a failing test can print compact recent instruction context.
+3. Add mtrace only behind a filter/config switch; keep normal regression output concise by default.
+4. Consider ftrace optional only if ELF symbol plumbing is nearby; do not block P1-S5 on it.
+5. Do not start M-extension implementation unless explicitly choosing to broaden `riscv32-nemu` beyond the RV32I-focused slice; the future target core remains RV32E_Zicsr.
 6. Do not touch `am-kernels/` unless the user explicitly approves fixing its macOS wrapper.
 
 Relevant files:
@@ -149,7 +172,11 @@ Relevant files:
 - `specs/riscv-isa-manual/src/unpriv/rv32.adoc`
 - `specs/riscv-isa-manual/src/unpriv/rv32e.adoc`
 - `nemu/.config` (generated/ignored local build config)
+- `nemu/include/utils.h`
+- `nemu/src/utils/state.c`
 - `nemu/src/monitor/monitor.c`
+- `nemu/src/monitor/sdb/sdb.c`
+- `nemu/src/cpu/cpu-exec.c`
 - `nemu/src/isa/riscv32/inst.c`
 - `nemu/src/isa/riscv32/init.c`
 - `abstract-machine/Makefile`

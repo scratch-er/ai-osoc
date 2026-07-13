@@ -74,6 +74,12 @@ static void exec_once(Decode *s, vaddr_t pc) {
 static void execute(uint64_t n) {
   Decode s;
   for (;n > 0; n --) {
+    if (nemu_inst_limit != 0 && g_nr_guest_inst >= nemu_inst_limit) {
+      nemu_state.state = NEMU_LIMIT;
+      nemu_state.halt_pc = cpu.pc;
+      nemu_state.halt_ret = 1;
+      break;
+    }
     exec_once(&s, cpu.pc);
     g_nr_guest_inst ++;
     trace_and_difftest(&s, cpu.pc);
@@ -89,6 +95,23 @@ static void statistic() {
   Log("total guest instructions = " NUMBERIC_FMT, g_nr_guest_inst);
   if (g_timer > 0) Log("simulation frequency = " NUMBERIC_FMT " inst/s", g_nr_guest_inst * 1000000 / g_timer);
   else Log("Finish running in less than 1 us and can not calculate the simulation frequency");
+}
+
+static const char *nemu_result() {
+  switch (nemu_state.state) {
+    case NEMU_END: return nemu_state.halt_ret == 0 ? "good" : "bad";
+    case NEMU_ABORT: return "abort";
+    case NEMU_QUIT: return "quit";
+    case NEMU_LIMIT: return "limit";
+    case NEMU_STOP: return "stop";
+    default: return "running";
+  }
+}
+
+static void report_result() {
+  printf("NEMU_RESULT status=%s state=%d halt_pc=" FMT_WORD " halt_ret=%u insts=%" PRIu64 " limit=%" PRIu64 "\n",
+      nemu_result(), nemu_state.state, nemu_state.halt_pc, nemu_state.halt_ret,
+      g_nr_guest_inst, nemu_inst_limit);
 }
 
 void assert_fail_msg() {
@@ -122,7 +145,20 @@ void cpu_exec(uint64_t n) {
            (nemu_state.halt_ret == 0 ? ANSI_FMT("HIT GOOD TRAP", ANSI_FG_GREEN) :
             ANSI_FMT("HIT BAD TRAP", ANSI_FG_RED))),
           nemu_state.halt_pc);
-      // fall through
-    case NEMU_QUIT: statistic();
+      statistic();
+      report_result();
+      break;
+    case NEMU_LIMIT:
+      Log("nemu: instruction limit reached at pc = " FMT_WORD, nemu_state.halt_pc);
+      statistic();
+      report_result();
+      break;
+    case NEMU_QUIT:
+      statistic();
+      report_result();
+      break;
+    case NEMU_STOP:
+      report_result();
+      break;
   }
 }
