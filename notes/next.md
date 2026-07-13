@@ -7,8 +7,9 @@ Current state:
 - Phase 1 Session 3 (`P1-S3: CPU-test instruction coverage slice`) is complete: the representative RV32I cpu-test slice passes and remaining failures are M-extension/device blockers.
 - Phase 1 Session 4 (`P1-S4: Batch mode and concise result reporting`) is complete.
 - Phase 1 Session 5 (`P1-S5: Essential tracing for failures`) is complete.
+- Phase 1 Session 6 (`P1-S6: DiffTest REF shared object preparation`) is complete: the NEMU REF shared object builds and its exported memory/register/exec APIs pass a host-side smoke test.
 - `npc/` is absent; no NPC work has started.
-- Repository status before Phase 1 work already had modified `notes/plan.md` and `notes/next.md`, plus untracked `.DS_Store` and `activate`.
+- Repository status before Phase 1 work already had untracked `.DS_Store` and `activate`. Leave them alone unless the user explicitly asks.
 
 Submodules reported earlier by `git submodule status`:
 
@@ -29,6 +30,7 @@ NEMU/AM current configuration:
   - `# CONFIG_MTRACE is not set`
   - `CONFIG_MBASE=0x80000000`
   - `CONFIG_MSIZE=0x2000000`
+- The REF shared-object check temporarily edits `nemu/.config` to `CONFIG_TARGET_SHARE=y`, runs `tools/kconfig/build/conf -s --syncconfig Kconfig`, builds `build/riscv32-nemu-interpreter-so`, then restores the native `.config` and rebuilds the native executable.
 - Devices remain disabled because native device build on this macOS environment failed on missing `SDL2/SDL.h`.
 - Host has `riscv64-elf-gcc`, not `riscv64-linux-gnu-gcc`; AM commands currently need `CROSS_COMPILE=riscv64-elf-`.
 - The installed `riscv64-elf-gcc` is configured `--without-headers`, so local freestanding AM headers were added:
@@ -36,87 +38,92 @@ NEMU/AM current configuration:
   - `abstract-machine/am/include/stddef.h`
   - `abstract-machine/am/include/stdbool.h`
 
-Changes made in Phase 1 Session 2:
+Important completed changes by session:
 
-- `nemu/src/monitor/monitor.c`
-  - Removed the intentional PA skeleton `assert(0)` and exercise log from `welcome()`.
-- `nemu/src/isa/riscv32/inst.c`
-  - Added immediate decode for J-type.
-  - Implemented the minimal RV32I instructions needed by AM `dummy`:
-    - `addi`
-    - `sw`
-    - `jal`
-    - `jalr`
-  - Existing implemented instructions at that point were only a tiny skeleton: `auipc`, `lbu`, `sb`, `ebreak`, plus invalid instruction handling.
-- `abstract-machine/Makefile`
-  - Fixed library linkage expansion so AM and klib archives are linked into test images.
-  - `define LIB_TEMPLATE =` was invalid for the intended multi-line macro; changed to `define LIB_TEMPLATE`.
-  - `LINKAGE` was changed to immediate assignment so generated archive dependencies are preserved correctly.
-- `abstract-machine/scripts/platform/nemu.mk`
-  - Added `-b` to `NEMUFLAGS` so AM `run` invokes NEMU in batch mode.
-  - Changed `python` to `python3` for `insert-arg.py` on this macOS environment.
-
-Changes made in Phase 1 Session 3:
-
-- `nemu/src/isa/riscv32/inst.c`
-  - Added operand decode for B-type and R-type.
-  - Added B-type immediate decode.
-  - Added RV32I instructions needed by the cpu-test slice:
-    - U-type: `lui`, `auipc`
-    - I-type/immediate: `addi`, `slti`, `sltiu`, `xori`, `ori`, `andi`, `slli`, `srli`, `srai`
-    - loads/stores: `lb`, `lh`, `lw`, `lbu`, `lhu`, `sb`, `sh`, `sw`
-    - R-type: `add`, `sub`, `sll`, `slt`, `srl`, `sra`, `sltu`, `xor`, `or`, `and`
-    - branches: `beq`, `bne`, `blt`, `bge`, `bltu`, `bgeu`
-- Added `notes/nemu-rv32i-instruction-notes.md` with instruction encodings, behavior, RISC-V manual references, passing-test command pattern, and next target.
-
-Changes made in Phase 1 Session 4:
-
-- `nemu/include/utils.h`
-  - Added `NEMU_LIMIT` state.
-  - Declared global `nemu_inst_limit`.
-- `nemu/src/utils/state.c`
-  - Defined `nemu_inst_limit`, defaulting to `0` for unlimited execution.
-- `nemu/src/monitor/monitor.c`
-  - Added CLI option `-m N` / `--max-insts=N`.
-  - Help text documents that `0` means unlimited.
-- `nemu/src/cpu/cpu-exec.c`
-  - Checks `nemu_inst_limit` before each guest instruction and stops with `NEMU_LIMIT` when reached.
-  - Prints a stable machine-readable result line after terminal outcomes:
-
-    ```text
-    NEMU_RESULT status=<good|bad|abort|quit|limit|stop|running> state=<n> halt_pc=<hex> halt_ret=<n> insts=<n> limit=<n>
-    ```
-
-  - Existing human-readable `HIT GOOD TRAP` / `HIT BAD TRAP` logs are preserved.
-- `abstract-machine/scripts/platform/nemu.mk`
-  - Added `NEMU_MAX_INSTS ?= 10000000`.
-  - AM `run` now passes `--max-insts=$(NEMU_MAX_INSTS)` together with existing batch/log flags.
-
-Changes made in Phase 1 Session 5:
-
-- `nemu/Kconfig`
-  - Added `CONFIG_IQUEUE` and `CONFIG_IQUEUE_SIZE` for a recent-instruction ring buffer.
-  - Added `CONFIG_MTRACE`, `CONFIG_MTRACE_START`, and `CONFIG_MTRACE_END` for address-filtered memory tracing.
-- `nemu/include/cpu/decode.h`
-  - Keeps `Decode.logbuf` when either `CONFIG_ITRACE` or `CONFIG_IQUEUE` is enabled.
-- `nemu/include/utils.h`
-  - Declared instruction queue and mtrace helpers.
-  - Added `log_write_force()` so opt-in mtrace can write even when global `CONFIG_TRACE` is off.
-- `nemu/src/utils/state.c`
-  - Added a bounded recent-instruction ring buffer with `trace_inst_record()` and `trace_inst_dump()`.
-  - Added `mtrace_enabled()` address filtering.
-- `nemu/src/cpu/cpu-exec.c`
-  - Records each decoded instruction into the ring buffer.
-  - Dumps `NEMU recent instructions:` only on `NEMU_ABORT`, bad trap, assertion failure, or instruction limit.
-  - Normal passing regressions still print only the existing concise status/result output.
-- `nemu/src/monitor/monitor.c`
-  - Initializes the disassembler when either `ITRACE` or `IQUEUE` is enabled.
-- `nemu/src/memory/paddr.c`
-  - Emits opt-in `MTRACE r/w pc=<pc> addr=<addr> len=<n> data=<data>` lines for filtered physical-memory/MMIO accesses when `CONFIG_MTRACE=y`.
+- P1-S2:
+  - `nemu/src/monitor/monitor.c`: removed the intentional PA skeleton `assert(0)` from `welcome()`.
+  - `nemu/src/isa/riscv32/inst.c`: added minimal AM `dummy` execution support (`addi`, `sw`, `jal`, `jalr`, J-type decode).
+  - `abstract-machine/Makefile`: fixed library linkage expansion for AM/klib archives.
+  - `abstract-machine/scripts/platform/nemu.mk`: run NEMU in batch mode and use `python3` for `insert-arg.py`.
+- P1-S3:
+  - `nemu/src/isa/riscv32/inst.c`: added common RV32I decode/execution coverage for the representative cpu-test slice: U/I/load/store/R/B instruction groups.
+  - Added `notes/nemu-rv32i-instruction-notes.md`.
+- P1-S4:
+  - Added `--max-insts` / `NEMU_LIMIT` and stable `NEMU_RESULT status=...` reporting.
+  - AM `riscv32-nemu` run path now passes `--max-insts=$(NEMU_MAX_INSTS)`.
+- P1-S5:
+  - Added compact instruction ring buffer (`CONFIG_IQUEUE`) and filtered memory tracing (`CONFIG_MTRACE`).
+  - Failure paths dump bounded recent instructions; normal passing runs stay concise.
+- P1-S6:
+  - `nemu/src/cpu/difftest/ref.c`: implemented REF-side `difftest_memcpy`, `difftest_regcpy`, and `difftest_exec` for the current riscv32 CPU state; `difftest_raise_intr` remains an explicit `assert(0)` gap because trap/CSR behavior is not implemented yet.
+  - `nemu/src/filelist.mk`: made the shared-object target omit `src/nemu-main.c`, monitor code, and the interactive engine entry so it can link as a DiffTest REF library without unresolved sdb symbols.
+  - Added `nemu/tools/ref-api-smoke.py`, a host-side ctypes smoke test that checks exported symbols, REF initialization, register copy, memory round-trip, and a one-instruction execution step.
 
 Validated commands and results:
 
-1. Build native NEMU and run the built-in image with an explicit limit:
+1. Build REF shared object and run REF API smoke test:
+
+   ```sh
+   cd nemu
+   cp .config /tmp/nemu.config.before-p1s6
+   python3 - <<'PY'
+   from pathlib import Path
+   p = Path('.config')
+   lines = p.read_text().splitlines()
+   out = []
+   seen_share = seen_native = False
+   for line in lines:
+       if line.startswith('CONFIG_TARGET_NATIVE_ELF=') or line == 'CONFIG_TARGET_NATIVE_ELF=y':
+           out.append('# CONFIG_TARGET_NATIVE_ELF is not set')
+           seen_native = True
+       elif line.startswith('# CONFIG_TARGET_NATIVE_ELF is not set'):
+           out.append('# CONFIG_TARGET_NATIVE_ELF is not set')
+           seen_native = True
+       elif line.startswith('CONFIG_TARGET_SHARE=') or line == 'CONFIG_TARGET_SHARE=y':
+           out.append('CONFIG_TARGET_SHARE=y')
+           seen_share = True
+       elif line.startswith('# CONFIG_TARGET_SHARE is not set'):
+           out.append('CONFIG_TARGET_SHARE=y')
+           seen_share = True
+       else:
+           out.append(line)
+   if not seen_native:
+       out.append('# CONFIG_TARGET_NATIVE_ELF is not set')
+   if not seen_share:
+       out.append('CONFIG_TARGET_SHARE=y')
+   p.write_text('\n'.join(out) + '\n')
+   PY
+   tools/kconfig/build/conf -s --syncconfig Kconfig
+   make -j$(sysctl -n hw.ncpu)
+   python3 tools/ref-api-smoke.py ./build/riscv32-nemu-interpreter-so
+   cp /tmp/nemu.config.before-p1s6 .config
+   tools/kconfig/build/conf -s --syncconfig Kconfig
+   make -j$(sysctl -n hw.ncpu)
+   ```
+
+   Result:
+
+   ```text
+   REF_API_SMOKE status=pass pc=0x80000004 x0=0x00000000 t0=0x80000000 mem_addr=0x80000100
+   ```
+
+   Export check on macOS:
+
+   ```sh
+   nm -gU build/riscv32-nemu-interpreter-so | grep difftest
+   ```
+
+   Result includes all required exported symbols:
+
+   ```text
+   _difftest_exec
+   _difftest_init
+   _difftest_memcpy
+   _difftest_raise_intr
+   _difftest_regcpy
+   ```
+
+2. Build native NEMU and run the built-in image with an explicit limit:
 
    ```sh
    cd nemu
@@ -130,7 +137,7 @@ Validated commands and results:
    NEMU_RESULT status=good state=2 halt_pc=0x8000000c halt_ret=0 insts=4 limit=100
    ```
 
-2. Verify instruction-limit failure path and bounded recent instruction dump:
+3. Verify instruction-limit failure path and bounded recent instruction dump:
 
    ```sh
    cd nemu
@@ -140,13 +147,10 @@ Validated commands and results:
    Result: exits nonzero as expected; output includes:
 
    ```text
-   NEMU recent instructions:
-         0x80000000: 00 00 02 97 auipc	t0, 0
-     --> 0x80000004: 00 02 88 23 sb	zero, 0x10(t0)
    NEMU_RESULT status=limit state=5 halt_pc=0x80000008 halt_ret=1 insts=2 limit=2
    ```
 
-3. Current cpu-test slice, checking `NEMU_RESULT status=good` for each test:
+4. Current cpu-test slice, checking `NEMU_RESULT status=good` for each test:
 
    ```sh
    source ./activate
@@ -164,48 +168,10 @@ Validated commands and results:
 
    Result: all 22 listed tests pass with `NEMU_RESULT status=good` and AM default `limit=10000000`.
 
-4. Failing-window check with an expected M-extension failure:
-
-   ```sh
-   source ./activate
-   cd am-kernels/tests/cpu-tests
-   printf 'NAME = %s\nSRCS = tests/%s.c\ninclude %s/Makefile\n' div div "$AM_HOME" > Makefile.div
-   out=$(make -f Makefile.div ARCH=riscv32-nemu CROSS_COMPILE=riscv64-elf- run 2>&1)
-   status=$?
-   rm -f Makefile.div
-   printf '%s\n' "$out" | grep -E 'NEMU_RESULT status=abort|NEMU recent instructions' | tail -20
-   ```
-
-   Result: expected failure still exits nonzero and includes `NEMU recent instructions:` plus:
-
-   ```text
-   NEMU_RESULT status=abort state=3 halt_pc=0x8000007c halt_ret=4294967295 insts=67 limit=10000000
-   ```
-
-5. Temporary `CONFIG_MTRACE=y` compile/run check:
-
-   - Temporarily set in `nemu/.config`:
-     - `CONFIG_MTRACE=y`
-     - `CONFIG_MTRACE_START=0x80000000`
-     - `CONFIG_MTRACE_END=0x800000ff`
-   - Ran `tools/kconfig/build/conf -s --syncconfig Kconfig`, rebuilt, then:
-
-     ```sh
-     ./build/riscv32-nemu-interpreter --batch --max-insts=2 --log=/tmp/nemu-mtrace.log
-     ```
-
-   - Result: mtrace lines appeared in `/tmp/nemu-mtrace.log`, for example:
-
-     ```text
-     MTRACE r pc=0x80000000 addr=0x80000000 len=4 data=0x00000297
-     MTRACE r pc=0x80000004 addr=0x80000004 len=4 data=0x00028823
-     MTRACE w pc=0x80000004 addr=0x80000010 len=1 data=0x00000000
-     ```
-
-   - Restored the default local config afterward (`CONFIG_IQUEUE=y`, `CONFIG_MTRACE` off).
-
 Known caveats:
 
+- `difftest_raise_intr()` in the NEMU REF shared object still asserts. This is acceptable for P1-S6 because current early NPC DiffTest preparation only needs memory copy, register copy, and instruction stepping. Implement trap/CSR behavior later before DiffTesting workloads that execute `ecall`, `mret`, or interrupts.
+- The current DiffTest register blob is `DIFFTEST_REG_SIZE`, i.e. 32 riscv32 GPRs plus PC. No CSR state is compared/exported yet.
 - `CONFIG_IQUEUE=y` builds Capstone under `nemu/tools/capstone/repo/` if not already present, because the ring buffer stores disassembled instruction strings. This directory is ignored/generated tooling.
 - The `am-kernels/tests/cpu-tests` wrapper command still fails on macOS:
 
@@ -215,23 +181,23 @@ Known caveats:
   ```
 
   It reports `[dummy] ***FAIL***` because the wrapper uses `/bin/echo -e` to generate `Makefile.$test`; macOS `/bin/echo` writes the literal `-e`, producing an invalid makefile. Do not modify `am-kernels/` unless explicitly allowed; use the temporary `printf` command above for now, or fix the wrapper later if the user permits changing `am-kernels`.
-
 - P1-S3 broad survey result after the RV32I slice:
   - Passing: `dummy`, `add`, `add-longlong`, `bit`, `bubble-sort`, `crc32`, `fib`, `if-else`, `load-store`, `max`, `min3`, `mov-c`, `movsx`, `pascal`, `quick-sort`, `select-sort`, `shift`, `sub-longlong`, `sum`, `switch`, `to-lower-case`, `unalign`.
   - Failing on M-extension opcodes from current `-march=rv32im_zicsr`: `div`, `fact`, `goldbach`, `leap-year`, `matrix-mul`, `mersenne`, `mul-longlong`, `narcissistic`, `prime`, `recursion`, `wanshu`.
   - Failing on disabled serial MMIO at `0xa00003f8`: `hello-str`, `string`.
 - `abstract-machine/scripts/riscv32-nemu.mk` still defaults `CROSS_COMPILE := riscv64-linux-gnu-`; continue passing `CROSS_COMPILE=riscv64-elf-` unless the toolchain/default is changed.
-- Devices are still disabled; serial/timer work should wait until the relevant Phase 1/AM workload sessions, or until SDL2/device strategy is decided.
+- Devices are still disabled; serial/timer work should wait until P1-S7 or until SDL2/device strategy is decided.
 - `--max-insts` counts global guest instructions since process start. That is fine for current one-image one-run invocations.
 
 Next work:
 
-1. Start Phase 1 Session 6 (`P1-S6: DiffTest REF shared object preparation`).
-2. Build or repair the NEMU shared-object reference target.
-3. Verify REF APIs for memory copy, register copy, execution step, and architecture state access needed by later NPC DiffTest.
-4. Keep CSR additions minimal unless required by the REF API sanity check.
-5. Do not start M-extension implementation unless explicitly choosing to broaden `riscv32-nemu` beyond the RV32I-focused slice; the future target core remains RV32E_Zicsr.
-6. Do not touch `am-kernels/` unless the user explicitly approves fixing its macOS wrapper.
+1. Start Phase 1 Session 7 (`P1-S7: AM workload integration and hello smoke test`).
+2. Ensure AM workloads build for `riscv32-nemu` with the batch run path.
+3. Run `dummy`, selected cpu-tests, and `hello` through AM commands.
+4. Implement/verify the NEMU trap path needed by AM workloads before `hello`, including M-mode `ecall` dispatch to `mtvec`, `mepc`, and `mcause` if the workload/runtime uses it.
+5. Fix only NEMU/AM issues required for serial output and basic TRM/IOE behavior; defer optional devices.
+6. Do not start M-extension implementation unless explicitly choosing to broaden `riscv32-nemu` beyond the RV32I-focused slice; the future target core remains RV32E_Zicsr.
+7. Do not touch `am-kernels/` unless the user explicitly approves fixing its macOS wrapper.
 
 Relevant files:
 
@@ -242,6 +208,9 @@ Relevant files:
 - `specs/riscv-isa-manual/src/unpriv/rv32.adoc`
 - `specs/riscv-isa-manual/src/unpriv/rv32e.adoc`
 - `nemu/.config` (generated/ignored local build config)
+- `nemu/src/filelist.mk`
+- `nemu/src/cpu/difftest/ref.c`
+- `nemu/tools/ref-api-smoke.py`
 - `nemu/Kconfig`
 - `nemu/include/utils.h`
 - `nemu/include/cpu/decode.h`

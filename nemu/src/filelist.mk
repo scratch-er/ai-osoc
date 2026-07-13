@@ -13,10 +13,12 @@
 # See the Mulan PSL v2 for more details.
 #**************************************************************************************/
 
-SRCS-y += src/nemu-main.c
+SRCS-$(CONFIG_TARGET_NATIVE_ELF) += src/nemu-main.c
 DIRS-y += src/cpu src/monitor src/utils
 DIRS-$(CONFIG_MODE_SYSTEM) += src/memory
 DIRS-BLACKLIST-$(CONFIG_TARGET_AM) += src/monitor/sdb
+DIRS-BLACKLIST-$(CONFIG_TARGET_SHARE) += src/monitor
+SRCS-BLACKLIST-$(CONFIG_TARGET_SHARE) += src/engine/interpreter/init.c
 
 SHARE = $(if $(CONFIG_TARGET_SHARE),1,0)
 LIBS += $(if $(CONFIG_TARGET_NATIVE_ELF),-lreadline -ldl -pie,)
