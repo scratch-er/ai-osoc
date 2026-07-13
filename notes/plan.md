@@ -127,6 +127,7 @@ Sessions:
 7. **P1-S7: AM workload integration and `hello` smoke test**
    - Ensure AM workloads build for `riscv32-nemu` with the batch run path.
    - Run `dummy`, selected cpu-tests, and `hello` through AM commands.
+   - Implement/verify the NEMU trap path needed by AM workloads before `hello`, including M-mode `ecall` dispatch to `mtvec`, `mepc`, and `mcause` if the workload/runtime uses it.
    - Fix only NEMU/AM issues required for serial output and basic TRM/IOE behavior; defer optional devices.
    - Record the exact workload commands and observed output.
    - Exit when `hello` reaches expected serial output or a narrow, documented device/runtime blocker remains.
@@ -165,8 +166,9 @@ Tasks:
    - optional waveform switch
 4. Implement a minimal datapath first: PC, register file, instruction fetch, decode, ALU, writeback.
 5. Start with a tiny subset (`addi`, `jalr`, `ebreak`) only to validate the harness.
-6. Add DPI-C or equivalent simulation hooks for memory access and trap reporting.
-7. Keep reset address configurable; default toward `0x20000000` per `specs/core.md`, while allowing test/SoC-specific overrides.
+6. Add the minimal trap/CSR path early enough for AM workloads that use `ecall`: `mtvec`, `mepc`, `mcause`, M-mode `ecall` entry, and `mret`. Keep this simple before expanding to full exception coverage.
+7. Add DPI-C or equivalent simulation hooks for memory access and trap reporting.
+8. Keep reset address configurable; default toward `0x20000000` per `specs/core.md`, while allowing test/SoC-specific overrides.
 
 Exit criteria:
 
@@ -191,14 +193,14 @@ Tasks:
    - ALU, compare, shift, branches, jumps, loads, stores
    - `fence` as nop
    - `fence.i` initially as architectural hook, later tied to icache clear
-3. Implement Zicsr instructions and only the required CSRs.
-4. Implement exception entry behavior for:
+3. Complete Zicsr instructions and only the required CSRs; the minimal `ecall`/`mret` trap path should already exist from Phase 2 if AM workload bring-up needed it.
+4. Complete exception entry behavior for:
    - instruction/load/store address misaligned
    - instruction/load/store access fault
    - illegal instruction
    - breakpoint
    - ecall from M-mode
-5. Implement `mret`; implement `wfi` as nop.
+5. Complete `mret`; implement `wfi` as nop.
 6. Ensure unimplemented CSRs and illegal encodings raise illegal-instruction exception.
 7. Add alignment and access-fault plumbing from memory/bus responses.
 8. Integrate DiffTest against NEMU, comparing PC, GPRs, and implemented CSRs at instruction retirement.
