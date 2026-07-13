@@ -8,6 +8,7 @@ Current state:
 - Phase 1 Session 4 (`P1-S4: Batch mode and concise result reporting`) is complete.
 - Phase 1 Session 5 (`P1-S5: Essential tracing for failures`) is complete.
 - Phase 1 Session 6 (`P1-S6: DiffTest REF shared object preparation`) is complete: the NEMU REF shared object builds and its exported memory/register/exec APIs pass a host-side smoke test.
+- Phase 1 Session 7 (`P1-S7: AM workload integration and hello smoke test`) is complete: AM `hello` prints through the minimal NEMU serial path and exits with `NEMU_RESULT status=good`.
 - `npc/` is absent; no NPC work has started.
 - Repository status before Phase 1 work already had untracked `.DS_Store` and `activate`. Leave them alone unless the user explicitly asks.
 
@@ -58,6 +59,11 @@ Important completed changes by session:
   - `nemu/src/cpu/difftest/ref.c`: implemented REF-side `difftest_memcpy`, `difftest_regcpy`, and `difftest_exec` for the current riscv32 CPU state; `difftest_raise_intr` remains an explicit `assert(0)` gap because trap/CSR behavior is not implemented yet.
   - `nemu/src/filelist.mk`: made the shared-object target omit `src/nemu-main.c`, monitor code, and the interactive engine entry so it can link as a DiffTest REF library without unresolved sdb symbols.
   - Added `nemu/tools/ref-api-smoke.py`, a host-side ctypes smoke test that checks exported symbols, REF initialization, register copy, memory round-trip, and a one-instruction execution step.
+- P1-S7:
+  - `nemu/src/isa/riscv32/include/isa-def.h` now carries the minimal M-mode CSR state used by AM traps: `mstatus`, `mtvec`, `mepc`, and `mcause`.
+  - `nemu/src/isa/riscv32/inst.c` implements the Zicsr instruction forms used by AM trap code, plus M-mode `ecall` and `mret`.
+  - `nemu/src/isa/riscv32/system/intr.c` saves `mepc`/`mcause` and dispatches to `mtvec`.
+  - `nemu/src/memory/paddr.c` provides a minimal `0xa00003f8` serial MMIO fallback when `CONFIG_DEVICE` is off, enough for AM `putch()`/`hello` output without requiring SDL2-backed devices.
 
 Validated commands and results:
 
@@ -168,10 +174,26 @@ Validated commands and results:
 
    Result: all 22 listed tests pass with `NEMU_RESULT status=good` and AM default `limit=10000000`.
 
+5. AM `hello` workload:
+
+   ```sh
+   source ./activate
+   cd am-kernels/kernels/hello
+   make ARCH=riscv32-nemu CROSS_COMPILE=riscv64-elf- run
+   ```
+
+   Result: prints the expected text through serial MMIO and exits cleanly:
+
+   ```text
+   Hello, AbstractMachine!
+   mainargs = ''.
+   NEMU_RESULT status=good state=2 halt_pc=0x800000c4 halt_ret=0 insts=352 limit=10000000
+   ```
+
 Known caveats:
 
-- `difftest_raise_intr()` in the NEMU REF shared object still asserts. This is acceptable for P1-S6 because current early NPC DiffTest preparation only needs memory copy, register copy, and instruction stepping. Implement trap/CSR behavior later before DiffTesting workloads that execute `ecall`, `mret`, or interrupts.
-- The current DiffTest register blob is `DIFFTEST_REG_SIZE`, i.e. 32 riscv32 GPRs plus PC. No CSR state is compared/exported yet.
+- `difftest_raise_intr()` in the NEMU REF shared object still asserts. Current `ecall`/`mret` trap execution works in normal NEMU execution, but the REF external interrupt API is still not implemented.
+- The current DiffTest register blob is still `DIFFTEST_REG_SIZE`, i.e. 32 riscv32 GPRs plus PC. The CPU struct now has `mstatus`/`mtvec`/`mepc`/`mcause`, but CSR state is not included in the DiffTest copy/check contract yet.
 - `CONFIG_IQUEUE=y` builds Capstone under `nemu/tools/capstone/repo/` if not already present, because the ring buffer stores disassembled instruction strings. This directory is ignored/generated tooling.
 - The `am-kernels/tests/cpu-tests` wrapper command still fails on macOS:
 
@@ -181,23 +203,22 @@ Known caveats:
   ```
 
   It reports `[dummy] ***FAIL***` because the wrapper uses `/bin/echo -e` to generate `Makefile.$test`; macOS `/bin/echo` writes the literal `-e`, producing an invalid makefile. Do not modify `am-kernels/` unless explicitly allowed; use the temporary `printf` command above for now, or fix the wrapper later if the user permits changing `am-kernels`.
-- P1-S3 broad survey result after the RV32I slice:
-  - Passing: `dummy`, `add`, `add-longlong`, `bit`, `bubble-sort`, `crc32`, `fib`, `if-else`, `load-store`, `max`, `min3`, `mov-c`, `movsx`, `pascal`, `quick-sort`, `select-sort`, `shift`, `sub-longlong`, `sum`, `switch`, `to-lower-case`, `unalign`.
-  - Failing on M-extension opcodes from current `-march=rv32im_zicsr`: `div`, `fact`, `goldbach`, `leap-year`, `matrix-mul`, `mersenne`, `mul-longlong`, `narcissistic`, `prime`, `recursion`, `wanshu`.
-  - Failing on disabled serial MMIO at `0xa00003f8`: `hello-str`, `string`.
+- Current cpu-test status after P1-S7:
+  - Passing verified this session: `dummy`, `add`, `add-longlong`, `bit`, `bubble-sort`, `crc32`, `fib`, `if-else`, `load-store`, `max`, `min3`, `mov-c`, `movsx`, `pascal`, `quick-sort`, `select-sort`, `shift`, `sub-longlong`, `sum`, `switch`, `to-lower-case`, `unalign`.
+  - The earlier serial MMIO blocker is fixed for simple byte output; AM `hello` now passes.
+  - `hello-str` was probed after the serial fix and now reaches serial output, but still fails in `abstract-machine/klib/src/stdio.c:17` because klib `printf` is not implemented. Leave this for a later klib/runtime session unless needed immediately.
+  - M-extension tests remain out of scope for now because the future target core remains RV32E_Zicsr.
 - `abstract-machine/scripts/riscv32-nemu.mk` still defaults `CROSS_COMPILE := riscv64-linux-gnu-`; continue passing `CROSS_COMPILE=riscv64-elf-` unless the toolchain/default is changed.
-- Devices are still disabled; serial/timer work should wait until P1-S7 or until SDL2/device strategy is decided.
+- Devices remain disabled because the native device build on this macOS environment needs SDL2; the minimal serial fallback is intentionally not a full device model.
 - `--max-insts` counts global guest instructions since process start. That is fine for current one-image one-run invocations.
 
 Next work:
 
-1. Start Phase 1 Session 7 (`P1-S7: AM workload integration and hello smoke test`).
-2. Ensure AM workloads build for `riscv32-nemu` with the batch run path.
-3. Run `dummy`, selected cpu-tests, and `hello` through AM commands.
-4. Implement/verify the NEMU trap path needed by AM workloads before `hello`, including M-mode `ecall` dispatch to `mtvec`, `mepc`, and `mcause` if the workload/runtime uses it.
-5. Fix only NEMU/AM issues required for serial output and basic TRM/IOE behavior; defer optional devices.
-6. Do not start M-extension implementation unless explicitly choosing to broaden `riscv32-nemu` beyond the RV32I-focused slice; the future target core remains RV32E_Zicsr.
-7. Do not touch `am-kernels/` unless the user explicitly approves fixing its macOS wrapper.
+1. Start Phase 1 Session 8 (`P1-S8: Phase closeout and handoff to NPC creation`).
+2. Re-run the standard Phase 1 smoke set: built-in NEMU, representative cpu-tests, AM `hello`, and REF shared-object smoke test.
+3. Decide whether to keep Phase 1 closed with only simple serial output or add a small klib `printf` session for `hello-str`/`string` before NPC work.
+4. Update `notes/next.md` with the stable Phase 1 handoff and first Phase 2 task.
+5. Do not touch `am-kernels/` unless the user explicitly approves fixing its macOS wrapper.
 
 Relevant files:
 
@@ -219,8 +240,10 @@ Relevant files:
 - `nemu/src/monitor/sdb/sdb.c`
 - `nemu/src/cpu/cpu-exec.c`
 - `nemu/src/memory/paddr.c`
+- `nemu/src/isa/riscv32/include/isa-def.h`
 - `nemu/src/isa/riscv32/inst.c`
 - `nemu/src/isa/riscv32/init.c`
+- `nemu/src/isa/riscv32/system/intr.c`
 - `abstract-machine/Makefile`
 - `abstract-machine/scripts/riscv32-nemu.mk`
 - `abstract-machine/scripts/platform/nemu.mk`

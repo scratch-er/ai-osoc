@@ -18,6 +18,8 @@
 #include <device/mmio.h>
 #include <isa.h>
 
+#define SERIAL_MMIO 0xa00003f8u
+
 #if   defined(CONFIG_PMEM_MALLOC)
 static uint8_t *pmem = NULL;
 #else // CONFIG_PMEM_GARRAY
@@ -60,6 +62,8 @@ word_t paddr_read(paddr_t addr, int len) {
   word_t data = mmio_read(addr, len);
   IFDEF(CONFIG_MTRACE, if (mtrace_enabled(addr)) log_write_force("MTRACE r pc=" FMT_WORD " addr=" FMT_PADDR " len=%d data=" FMT_WORD "\n", cpu.pc, addr, len, data));
   return data;
+#else
+  if (addr == SERIAL_MMIO && len == 1) { return 0; }
 #endif
   out_of_bound(addr);
   return 0;
@@ -68,6 +72,11 @@ word_t paddr_read(paddr_t addr, int len) {
 void paddr_write(paddr_t addr, int len, word_t data) {
   IFDEF(CONFIG_MTRACE, if (mtrace_enabled(addr)) log_write_force("MTRACE w pc=" FMT_WORD " addr=" FMT_PADDR " len=%d data=" FMT_WORD "\n", cpu.pc, addr, len, data));
   if (likely(in_pmem(addr))) { pmem_write(addr, len, data); return; }
-  IFDEF(CONFIG_DEVICE, mmio_write(addr, len, data); return);
+#ifdef CONFIG_DEVICE
+  mmio_write(addr, len, data);
+  return;
+#else
+  if (addr == SERIAL_MMIO && len == 1) { putc(data & 0xff, stderr); return; }
+#endif
   out_of_bound(addr);
 }

@@ -22,6 +22,26 @@
 #define Mr vaddr_read
 #define Mw vaddr_write
 
+static word_t csr_read(uint32_t addr) {
+  switch (addr) {
+    case 0x300: return cpu.mstatus;
+    case 0x305: return cpu.mtvec;
+    case 0x341: return cpu.mepc;
+    case 0x342: return cpu.mcause;
+    default: INV(cpu.pc); return 0;
+  }
+}
+
+static void csr_write(uint32_t addr, word_t val) {
+  switch (addr) {
+    case 0x300: cpu.mstatus = val; break;
+    case 0x305: cpu.mtvec = val; break;
+    case 0x341: cpu.mepc = val; break;
+    case 0x342: cpu.mcause = val; break;
+    default: INV(cpu.pc); break;
+  }
+}
+
 enum {
   TYPE_I, TYPE_U, TYPE_S, TYPE_J, TYPE_B, TYPE_R,
   TYPE_N, // none
@@ -102,6 +122,14 @@ static int decode_exec(Decode *s) {
   INSTPAT("??????? ????? ????? ????? ????? 11011 11", jal    , J, R(rd) = s->snpc; s->dnpc = s->pc + imm);
   INSTPAT("??????? ????? ????? 000 ????? 11001 11", jalr   , I, R(rd) = s->snpc; s->dnpc = (src1 + imm) & ~1);
 
+  INSTPAT("??????? ????? ????? 001 ????? 11100 11", csrrw  , I, word_t t = csr_read(BITS(s->isa.inst, 31, 20)); csr_write(BITS(s->isa.inst, 31, 20), src1); R(rd) = t);
+  INSTPAT("??????? ????? ????? 010 ????? 11100 11", csrrs  , I, word_t t = csr_read(BITS(s->isa.inst, 31, 20)); if (BITS(s->isa.inst, 19, 15) != 0) csr_write(BITS(s->isa.inst, 31, 20), t | src1); R(rd) = t);
+  INSTPAT("??????? ????? ????? 011 ????? 11100 11", csrrc  , I, word_t t = csr_read(BITS(s->isa.inst, 31, 20)); if (BITS(s->isa.inst, 19, 15) != 0) csr_write(BITS(s->isa.inst, 31, 20), t & ~src1); R(rd) = t);
+  INSTPAT("??????? ????? ????? 101 ????? 11100 11", csrrwi , I, word_t t = csr_read(BITS(s->isa.inst, 31, 20)); csr_write(BITS(s->isa.inst, 31, 20), BITS(s->isa.inst, 19, 15)); R(rd) = t);
+  INSTPAT("??????? ????? ????? 110 ????? 11100 11", csrrsi , I, word_t t = csr_read(BITS(s->isa.inst, 31, 20)); if (BITS(s->isa.inst, 19, 15) != 0) csr_write(BITS(s->isa.inst, 31, 20), t | BITS(s->isa.inst, 19, 15)); R(rd) = t);
+  INSTPAT("??????? ????? ????? 111 ????? 11100 11", csrrci , I, word_t t = csr_read(BITS(s->isa.inst, 31, 20)); if (BITS(s->isa.inst, 19, 15) != 0) csr_write(BITS(s->isa.inst, 31, 20), t & ~BITS(s->isa.inst, 19, 15)); R(rd) = t);
+  INSTPAT("0000000 00000 00000 000 00000 11100 11", ecall  , N, s->dnpc = isa_raise_intr(11, s->pc));
+  INSTPAT("0011000 00010 00000 000 00000 11100 11", mret   , N, s->dnpc = cpu.mepc);
   INSTPAT("0000000 00001 00000 000 00000 11100 11", ebreak , N, NEMUTRAP(s->pc, R(10))); // R(10) is $a0
   INSTPAT("??????? ????? ????? ??? ????? ????? ??", inv    , N, INV(s->pc));
   INSTPAT_END();
