@@ -59,7 +59,7 @@ Subagent or similar mechanisms are designed for a single task that can produce a
 
 ## Directory Layout
 
-- `specs/` contains the specifications. You should not modify anything inside it unless explicitly instructed.
+- `specs/` contains the specifications. You should not modify anything inside it unless explicitly instructed by user.
   
   - `specs/core.md` is the specifications of the core you need to design.
   
@@ -68,7 +68,8 @@ Subagent or similar mechanisms are designed for a single task that can produce a
 - `nemu/` is the project directory of your emulator.
 - `npc/` is the project directory of your processor core.
 - `abstract-machine/` contains source file of the abstract machine (AM) framework.
-- `am-kernels/` contains workloads based on the abstract machine framework. You should not modify anything inside it unless explicitly instructed.
+- `am-kernels/` contains workloads based on the abstract machine framework. You should not modify anything inside it unless explicitly instructed by user.
 - `rt-thread-am/` contains the source code of the AM port of RT-Thread.
+- `ysyxSoC/` contains an SoC that you need to connect your core to. You should make any commits to the default branch of this submodule or add any changes from this submodule unless explicitly instructed by user.
 
 
