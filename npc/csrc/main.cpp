@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <array>
 #include <memory>
 #include <string>
 
@@ -22,6 +23,14 @@ constexpr uint32_t NPC_STATUS_GOOD = 1;
 constexpr uint32_t NPC_STATUS_BAD = 2;
 constexpr uint32_t NPC_STATUS_LIMIT = 3;
 
+constexpr size_t TRACE_DEPTH = 8;
+
+struct TraceEntry {
+  uint64_t cycle = 0;
+  uint32_t pc = 0;
+  uint32_t inst = 0;
+};
+
 struct Args {
   std::string image;
   uint64_t max_cycles = 100;
@@ -29,10 +38,13 @@ struct Args {
   bool wave = false;
   bool check_x1 = false;
   uint32_t expect_x1 = 0;
+  bool dump_trace = false;
+  bool dump_regs = false;
+  bool mem_trace = false;
 };
 
 void usage(const char *prog) {
-  std::printf("Usage: %s [--image FILE] [--max-cycles N] [--reset-pc HEX] [--expect-x1 HEX] [--wave]\n", prog);
+  std::printf("Usage: %s [--image FILE] [--max-cycles N] [--reset-pc HEX] [--expect-x1 HEX] [--wave] [--dump-trace] [--dump-regs] [--mem-trace]\n", prog);
 }
 
 bool parse_u64(const char *s, uint64_t *value) {
@@ -43,6 +55,33 @@ bool parse_u64(const char *s, uint64_t *value) {
   }
   *value = static_cast<uint64_t>(v);
   return true;
+}
+
+uint32_t debug_reg(const VNPC &top, int idx) {
+  return top.debug_regs_flat[idx];
+}
+
+void dump_regs(const VNPC &top) {
+  for (int row = 0; row < 4; row++) {
+    int base = row * 4;
+    std::printf("NPC_REGS x%-2d=0x%08x x%-2d=0x%08x x%-2d=0x%08x x%-2d=0x%08x\n",
+                base, debug_reg(top, base),
+                base + 1, debug_reg(top, base + 1),
+                base + 2, debug_reg(top, base + 2),
+                base + 3, debug_reg(top, base + 3));
+  }
+}
+
+void dump_trace(const std::array<TraceEntry, TRACE_DEPTH> &trace, size_t trace_count) {
+  size_t count = trace_count < TRACE_DEPTH ? trace_count : TRACE_DEPTH;
+  size_t start = trace_count >= TRACE_DEPTH ? trace_count % TRACE_DEPTH : 0;
+  for (size_t i = 0; i < count; i++) {
+    const TraceEntry &entry = trace[(start + i) % TRACE_DEPTH];
+    std::printf("NPC_TRACE cycle=%llu pc=0x%08x inst=0x%08x\n",
+                static_cast<unsigned long long>(entry.cycle),
+                entry.pc,
+                entry.inst);
+  }
 }
 
 bool parse_args(int argc, char **argv, Args *args) {
@@ -71,6 +110,12 @@ bool parse_args(int argc, char **argv, Args *args) {
       args->expect_x1 = static_cast<uint32_t>(value);
     } else if (std::strcmp(argv[i], "--wave") == 0) {
       args->wave = true;
+    } else if (std::strcmp(argv[i], "--dump-trace") == 0) {
+      args->dump_trace = true;
+    } else if (std::strcmp(argv[i], "--dump-regs") == 0) {
+      args->dump_regs = true;
+    } else if (std::strcmp(argv[i], "--mem-trace") == 0) {
+      args->mem_trace = true;
     } else if (std::strcmp(argv[i], "--help") == 0) {
       usage(argv[0]);
       std::exit(0);
@@ -94,6 +139,7 @@ int main(int argc, char **argv) {
   }
 
   Memory memory(args.reset_pc);
+  memory.set_trace(args.mem_trace);
   set_pmem(&memory);
   if (!memory.load_image(args.image)) {
     std::printf("NPC_RESULT status=bad reason=image_load_failed cycles=0 pc=0x%08x\n", args.reset_pc);
@@ -135,8 +181,12 @@ int main(int argc, char **argv) {
   eval_cycle();
   top->reset = 0;
 
+  std::array<TraceEntry, TRACE_DEPTH> trace;
+  size_t trace_count = 0;
   uint64_t cycles = 0;
   while (!Verilated::gotFinish() && !top->debug_halted && cycles < args.max_cycles) {
+    trace[trace_count % TRACE_DEPTH] = TraceEntry{cycles, top->debug_pc, top->debug_inst};
+    trace_count++;
     eval_cycle();
     cycles++;
   }
@@ -167,6 +217,13 @@ int main(int argc, char **argv) {
               top->debug_x1,
               top->debug_a0,
               trap_status);
+  bool dump_on_failure = !run_pass;
+  if (args.dump_trace || dump_on_failure) {
+    dump_trace(trace, trace_count);
+  }
+  if (args.dump_regs || dump_on_failure) {
+    dump_regs(*top);
+  }
 
 #if VM_TRACE
   if (tfp) {

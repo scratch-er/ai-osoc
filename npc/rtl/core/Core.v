@@ -10,7 +10,9 @@ module Core #(
   output        debug_halted,
   output [31:0] debug_x1,
   output [31:0] debug_a0,
-  output [1:0]  debug_trap_status
+  output [1:0]  debug_trap_status,
+  output [31:0] debug_inst,
+  output [511:0] debug_regs_flat
 );
 
   wire [31:0] reset_vector = (reset_pc == 32'd0) ? RESET_PC : reset_pc;
@@ -64,6 +66,7 @@ module Core #(
   assign debug_pc = pc;
   assign debug_halted = halted;
   assign debug_trap_status = trap_status;
+  assign debug_inst = inst;
 
   Ifu u_ifu (
     .pc(fetch_pc),
@@ -99,7 +102,8 @@ module Core #(
     .waddr(rd[3:0]),
     .wdata(final_wb_data),
     .debug_x1(debug_x1),
-    .debug_a0(debug_a0)
+    .debug_a0(debug_a0),
+    .debug_regs_flat(debug_regs_flat)
   );
 
   Exu u_exu (

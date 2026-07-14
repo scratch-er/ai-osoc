@@ -11,7 +11,9 @@ module NPC #(
   output        debug_halted,
   output [31:0] debug_x1,
   output [31:0] debug_a0,
-  output [1:0]  debug_trap_status
+  output [1:0]  debug_trap_status,
+  output [31:0] debug_inst,
+  output [511:0] debug_regs_flat
 );
 
   wire unused_interrupt = io_interrupt;
@@ -26,7 +28,9 @@ module NPC #(
     .debug_halted(debug_halted),
     .debug_x1(debug_x1),
     .debug_a0(debug_a0),
-    .debug_trap_status(debug_trap_status)
+    .debug_trap_status(debug_trap_status),
+    .debug_inst(debug_inst),
+    .debug_regs_flat(debug_regs_flat)
   );
 
 endmodule

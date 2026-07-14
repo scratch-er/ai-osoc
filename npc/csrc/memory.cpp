@@ -60,10 +60,14 @@ uint32_t Memory::read32(uint32_t addr) const {
   }
 
   uint32_t off = addr - base_addr_;
-  return static_cast<uint32_t>(data_[off]) |
-         (static_cast<uint32_t>(data_[off + 1]) << 8) |
-         (static_cast<uint32_t>(data_[off + 2]) << 16) |
-         (static_cast<uint32_t>(data_[off + 3]) << 24);
+  uint32_t data = static_cast<uint32_t>(data_[off]) |
+                  (static_cast<uint32_t>(data_[off + 1]) << 8) |
+                  (static_cast<uint32_t>(data_[off + 2]) << 16) |
+                  (static_cast<uint32_t>(data_[off + 3]) << 24);
+  if (trace_) {
+    std::printf("NPC_MEM r addr=0x%08x data=0x%08x\n", addr, data);
+  }
+  return data;
 }
 
 void Memory::write32(uint32_t addr, uint32_t data) {
@@ -77,6 +81,9 @@ void Memory::write32(uint32_t addr, uint32_t data) {
   data_[off + 1] = static_cast<uint8_t>(data >> 8);
   data_[off + 2] = static_cast<uint8_t>(data >> 16);
   data_[off + 3] = static_cast<uint8_t>(data >> 24);
+  if (trace_) {
+    std::printf("NPC_MEM w addr=0x%08x data=0x%08x\n", addr, data);
+  }
 }
 
 void set_pmem(Memory *memory) {

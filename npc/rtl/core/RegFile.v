@@ -9,7 +9,8 @@ module RegFile (
   input  [3:0]  waddr,
   input  [31:0] wdata,
   output [31:0] debug_x1,
-  output [31:0] debug_a0
+  output [31:0] debug_a0,
+  output [511:0] debug_regs_flat
 );
 
   reg [31:0] regs [0:15];
@@ -19,6 +20,12 @@ module RegFile (
   assign rdata2 = (raddr2 == 4'd0) ? 32'd0 : regs[raddr2];
   assign debug_x1 = regs[4'd1];
   assign debug_a0 = regs[4'd10];
+  assign debug_regs_flat = {
+    regs[4'd15], regs[4'd14], regs[4'd13], regs[4'd12],
+    regs[4'd11], regs[4'd10], regs[4'd9],  regs[4'd8],
+    regs[4'd7],  regs[4'd6],  regs[4'd5],  regs[4'd4],
+    regs[4'd3],  regs[4'd2],  regs[4'd1],  32'd0
+  };
 
   always @(posedge clock) begin
     if (reset) begin

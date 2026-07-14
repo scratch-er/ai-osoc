@@ -8,6 +8,7 @@ Current state:
 - `P2-S2: Minimal execution datapath (addi)` is complete.
 - `P2-S3: Control flow and trap termination (jalr, ebreak)` is complete.
 - `P2-S4: DPI-C data memory path and tiny load/store subset` is complete.
+- `P2-S5: NPC debug infrastructure baseline` is complete.
 - NPC implementation style is **Verilog**.
 - Repository status before Phase 2 already had untracked `.DS_Store` and `activate`; leave them alone unless the user explicitly asks.
 
@@ -125,82 +126,76 @@ Phase 2 completed work:
   - `npc/tests/bin/lw-sw.bin`
   - program words at reset PC `0x100`: `addi x2,x0,0x100`; `addi x3,x0,0x2a`; `sw x3,0x40(x2)`; `lw x1,0x40(x2)`; `ebreak`.
   - expected final `x1 = 0x2a`, `a0 = 0`, GOOD trap.
+- Implemented the P2-S5 debug baseline:
+  - `RegFile.v` exposes a flattened RV32E debug register bus (`x0..x15`, with `x0` forced to zero) through `Core.v` and `NPC.v`.
+  - `Core.v` exposes the current fetched instruction as `debug_inst`.
+  - `main.cpp` maintains an 8-entry recent `{cycle, pc, inst}` ring.
+  - Failing runs automatically print bounded `NPC_TRACE` lines and a 16-register `NPC_REGS` dump after the structured `NPC_RESULT` line.
+  - Passing runs remain concise by default.
+  - Runtime flags were added:
+    - `--dump-trace`: print the bounded trace even on passing runs.
+    - `--dump-regs`: print the register dump even on passing runs.
+    - `--mem-trace`: print `NPC_MEM r/w` lines from DPI memory accesses.
+  - Added `make -C npc test-debug` to validate a cycle-limit failure dump and optional memory tracing.
 
 Validated commands and current results:
 
-1. NPC deterministic smoke test:
+1. Full current NPC regression command:
+
+   ```sh
+   make -C npc smoke && make -C npc test-addi && make -C npc test-jalr-ebreak && make -C npc test-lw-sw && make -C npc test-debug
+   ```
+
+   Result: all five checks passed in this session.
+
+2. NPC deterministic smoke test:
 
    ```sh
    make -C npc smoke
    ```
 
-   Result:
+   Result: the no-image all-zero instruction at reset PC reports BAD and now includes one `NPC_TRACE` line and one `NPC_REGS` dump because it is a failure-oriented smoke case.
 
-   ```text
-   NPC_RESULT status=bad cycles=1 pc=0x20000000 halted=1 limit=8 x1=0x00000000 a0=0x00000000 trap=2
-   ```
-
-   This no-image smoke checks that an all-zero/unsupported instruction at reset PC reports BAD status.
-
-2. NPC `addi` datapath regression:
+3. NPC `addi` datapath regression:
 
    ```sh
    make -C npc test-addi
    ```
 
-   Result:
+   Result: `NPC_CHECK x1=0x00000005 expect=0x00000005 PASS`; final `NPC_RESULT status=bad ... trap=2` because the test intentionally ends on unsupported `0x00000000`. Failure trace/register dump is expected for this current test shape.
 
-   ```text
-   NPC_IMAGE path=tests/bin/addi.bin base=0x20000000 size=16
-   NPC_CHECK x1=0x00000005 expect=0x00000005 PASS
-   NPC_RESULT status=bad cycles=4 pc=0x2000000c halted=1 limit=8 x1=0x00000005 a0=0x00000000 trap=2
-   ```
-
-   The `addi` regression still verifies x1 and x0 behavior, but it intentionally ends on unsupported `0x00000000`, so overall trap status is BAD.
-
-3. NPC `jalr`/`ebreak` regression:
+4. NPC `jalr`/`ebreak` regression:
 
    ```sh
    make -C npc test-jalr-ebreak
    ```
 
-   Result:
+   Result: `NPC_RESULT status=good cycles=5 pc=0x00000120 halted=1 limit=16 x1=0x00000102 a0=0x00000000 trap=1`.
 
-   ```text
-   NPC_IMAGE path=tests/bin/jalr-ebreak.bin base=0x00000100 size=36
-   NPC_TRAP code=1
-   NPC_CHECK x1=0x00000102 expect=0x00000102 PASS
-   NPC_RESULT status=good cycles=5 pc=0x00000120 halted=1 limit=16 x1=0x00000102 a0=0x00000000 trap=1
-   ```
-
-4. NPC aligned `lw`/`sw` regression:
+5. NPC aligned `lw`/`sw` regression:
 
    ```sh
    make -C npc test-lw-sw
    ```
 
-   Result:
+   Result: `NPC_RESULT status=good cycles=5 pc=0x00000110 halted=1 limit=16 x1=0x0000002a a0=0x00000000 trap=1`.
 
-   ```text
-   NPC_IMAGE path=tests/bin/lw-sw.bin base=0x00000100 size=20
-   NPC_TRAP code=1
-   NPC_CHECK x1=0x0000002a expect=0x0000002a PASS
-   NPC_RESULT status=good cycles=5 pc=0x00000110 halted=1 limit=16 x1=0x0000002a a0=0x00000000 trap=1
-   ```
-
-5. Full current NPC regression command:
+6. NPC debug infrastructure regression:
 
    ```sh
-   make -C npc smoke && make -C npc test-addi && make -C npc test-jalr-ebreak && make -C npc test-lw-sw
+   make -C npc test-debug
    ```
 
-   Result: all four checks passed in this session.
+   Result: passed. It checks:
+
+   - a deliberately short `jalr-ebreak` run reports `NPC_RESULT status=limit ...`, prints recent PCs/instructions, and dumps registers;
+   - `--mem-trace` on `lw-sw.bin` prints the expected store line `NPC_MEM w addr=0x00000140 data=0x0000002a` while the program still finishes GOOD.
 
 Known caveats:
 
 - NPC currently executes only `addi`, aligned `lw`, aligned `sw`, `jalr`, and `ebreak`; all other instructions halt as BAD unsupported/illegal instructions.
 - P2-S4 memory access is an early aligned 32-bit happy path. Misalignment, access faults, byte/halfword loads/stores, and byte masks remain later work.
-- `debug_x1`, `debug_a0`, and `debug_trap_status` are temporary harness-visible check signals; later DiffTest/register dump support should replace ad hoc debug outputs.
+- `debug_x1`, `debug_a0`, `debug_trap_status`, `debug_inst`, and `debug_regs_flat` are temporary harness-visible check signals; later DiffTest/register dump support should replace ad hoc debug outputs where appropriate.
 - `npc/tests/bin/addi.bin`, `npc/tests/bin/jalr-ebreak.bin`, and `npc/tests/bin/lw-sw.bin` are raw binaries, not hex text parser inputs.
 - Verilator build output is still somewhat verbose on clean builds, but warnings are kept clean enough for `-Wall`.
 - `difftest_raise_intr()` in the NEMU REF shared object still asserts. Current normal NEMU trap execution supports the minimal AM `ecall`/`mret` path, but the REF external interrupt API is not implemented.
@@ -214,14 +209,15 @@ Known caveats:
 
 Next work:
 
-Start `P2-S5: NPC debug infrastructure baseline`:
+Start `P2-S6: Early DiffTest hookup against NEMU REF`:
 
-1. Add concise failure-oriented register dump support to the NPC harness.
-2. Add a bounded recent PC/instruction trace ring in the harness or RTL-visible debug path.
-3. Add an optional memory access trace switch if it stays quiet by default.
-4. Keep normal passing output unchanged and concise.
-5. Validate debug output with an injected bad/unsupported program and a cycle-limit case, then remove any injected bug.
-6. Re-run `make -C npc smoke`, `make -C npc test-addi`, `make -C npc test-jalr-ebreak`, and `make -C npc test-lw-sw`.
+1. Ensure `nemu/build/riscv32-nemu-interpreter-so` is current; rebuild REF shared object if needed using the recorded Phase 1 flow.
+2. Link the NPC simulator against the REF shared object or load it dynamically if that keeps normal builds simpler.
+3. Add command-line switches to enable DiffTest and initialize REF memory/register state from the loaded NPC image.
+4. Define the early comparison contract as PC plus RV32E-visible GPRs `x0..x15`; ignore or assert zero for `x16..x31` in REF during tiny RV32E tests.
+5. Step REF once per retired NPC instruction and compare after each step for `addi`, `jalr`, `ebreak`, `lw`, and `sw` tiny programs.
+6. Inject a temporary mismatch only during validation, verify DiffTest catches it with concise trace/register context, then remove the mismatch.
+7. Re-run `make -C npc smoke`, `make -C npc test-addi`, `make -C npc test-jalr-ebreak`, `make -C npc test-lw-sw`, and `make -C npc test-debug`.
 
 Relevant files:
 

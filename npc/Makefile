@@ -14,7 +14,7 @@ ifeq ($(TRACE),1)
 VERILATOR_FLAGS += --trace
 endif
 
-.PHONY: all run smoke test-addi test-jalr-ebreak test-lw-sw clean
+.PHONY: all run smoke test-addi test-jalr-ebreak test-lw-sw test-debug clean
 
 all: $(BIN)
 
@@ -48,6 +48,17 @@ test-lw-sw: $(BIN)
 	printf '%s\n' "$$out"; \
 	printf '%s\n' "$$out" | grep 'NPC_TRAP code=1' >/dev/null; \
 	printf '%s\n' "$$out" | grep 'NPC_CHECK x1=0x0000002a expect=0x0000002a PASS' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good cycles=5 pc=0x00000110 halted=1 limit=16 x1=0x0000002a a0=0x00000000 trap=1' >/dev/null
+
+test-debug: $(BIN)
+	@out="$$($(BIN) --image tests/bin/jalr-ebreak.bin --reset-pc 0x100 --max-cycles 2 --expect-x1 0x102 2>&1 || true)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=limit cycles=2 pc=0x00000118 halted=0 limit=2 x1=0x00000100 a0=0x00000000 trap=3' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_TRACE cycle=1 pc=0x00000104 inst=0x018082e7' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_REGS .*x1 =0x00000100' >/dev/null; \
+	out="$$($(BIN) --image tests/bin/lw-sw.bin --reset-pc 0x100 --max-cycles 16 --expect-x1 0x2a --mem-trace 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_MEM w addr=0x00000140 data=0x0000002a' >/dev/null; \
 	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good cycles=5 pc=0x00000110 halted=1 limit=16 x1=0x0000002a a0=0x00000000 trap=1' >/dev/null
 
 clean:
