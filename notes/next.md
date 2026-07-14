@@ -6,6 +6,7 @@ Current state:
 - Phase 2 has started.
 - `P2-S1: NPC project skeleton and Verilator harness` is complete.
 - `P2-S2: Minimal execution datapath (addi)` is complete.
+- `P2-S3: Control flow and trap termination (jalr, ebreak)` is complete.
 - NPC implementation style is **Verilog**.
 - Repository status before Phase 2 already had untracked `.DS_Store` and `activate`; leave them alone unless the user explicitly asks.
 
@@ -98,10 +99,21 @@ Phase 2 completed work:
   - `Core.v` connects IFU/IDU/RegFile/EXU/WBU for `addi`, advances `pc + 4` on legal `addi`, and halts on unsupported instructions.
   - `NPC.v` exposes `debug_x1` for the early harness checker.
   - `main.cpp` stops the simulation when `debug_halted` is asserted, supports `--expect-x1`, and emits `x1=...` in `NPC_RESULT`.
-- Added a tiny raw-binary regression:
+- Added a tiny raw-binary `addi` regression:
   - `npc/tests/bin/addi.bin`
   - program words: `addi x1,x0,7`; `addi x0,x0,9`; `addi x1,x1,-2`; `0x00000000` unsupported-instruction halt.
   - expected final `x1 = 5`, proving immediate add and x0 immutability for this small slice.
+- Implemented the P2-S3 control-flow/trap slice:
+  - `Idu.v` now decodes `jalr` and `ebreak`.
+  - `Core.v` writes `pc + 4` for `jalr`, calculates the target as `(rs1 + imm) & ~1`, and redirects the PC.
+  - `Core.v` halts on `ebreak`, maps `a0 == 0` to GOOD and nonzero `a0` to BAD, and calls DPI-C `npc_trap(status)`.
+  - Unsupported/illegal instructions now halt with BAD trap status rather than being treated as successful termination.
+  - `RegFile.v` and `NPC.v` expose `debug_a0` and `debug_trap_status` for the harness.
+  - `main.cpp` now derives process/result status from trap status and includes `a0=... trap=...` in `NPC_RESULT`.
+  - `dpi.h`/`dpi.cpp` use C linkage for the DPI trap symbol.
+- Added a tiny raw-binary `jalr`/`ebreak` regression:
+  - `npc/tests/bin/jalr-ebreak.bin`
+  - It runs at reset PC `0x100`, uses `addi` to form a `jalr` target, skips BAD-setting instructions, reaches `a0 = 0`, and terminates via `ebreak`.
 
 Validated commands and current results:
 
@@ -114,10 +126,10 @@ Validated commands and current results:
    Result:
 
    ```text
-   NPC_RESULT status=good cycles=1 pc=0x20000000 halted=1 limit=8 x1=0x00000000
+   NPC_RESULT status=bad cycles=1 pc=0x20000000 halted=1 limit=8 x1=0x00000000 a0=0x00000000 trap=2
    ```
 
-   This no-image smoke now halts immediately on the zero word at reset PC, because unsupported instructions are the current stop mechanism.
+   This no-image smoke checks that an all-zero/unsupported instruction at reset PC now reports BAD status, which is expected after P2-S3 added explicit GOOD/BAD trap status.
 
 2. NPC `addi` datapath regression:
 
@@ -130,16 +142,31 @@ Validated commands and current results:
    ```text
    NPC_IMAGE path=tests/bin/addi.bin base=0x20000000 size=16
    NPC_CHECK x1=0x00000005 expect=0x00000005 PASS
-   NPC_RESULT status=good cycles=4 pc=0x2000000c halted=1 limit=8 x1=0x00000005
+   NPC_RESULT status=bad cycles=4 pc=0x2000000c halted=1 limit=8 x1=0x00000005 a0=0x00000000 trap=2
+   ```
+
+   The `addi` regression still verifies x1 and x0 behavior, but it intentionally ends on unsupported `0x00000000`, so overall trap status is BAD.
+
+3. NPC `jalr`/`ebreak` regression:
+
+   ```sh
+   make -C npc test-jalr-ebreak
+   ```
+
+   Result:
+
+   ```text
+   NPC_IMAGE path=tests/bin/jalr-ebreak.bin base=0x00000100 size=36
+   NPC_TRAP code=1
+   NPC_CHECK x1=0x00000102 expect=0x00000102 PASS
+   NPC_RESULT status=good cycles=5 pc=0x00000120 halted=1 limit=16 x1=0x00000102 a0=0x00000000 trap=1
    ```
 
 Known caveats:
 
-- NPC currently only executes `addi`; all other instructions halt as unsupported.
-- Halt-on-unsupported is only an early P2-S2 stop mechanism. `P2-S3` should implement `ebreak` and proper GOOD/BAD trap reporting.
-- `debug_x1` is a temporary harness-visible check signal for the early `addi` regression; later DiffTest/register dump support should replace ad hoc single-register checks.
-- `npc/tests/bin/addi.bin` is a raw binary, not a hex text parser input.
-- `npc/csrc/dpi.cpp` still contains only a placeholder `npc_trap()` print helper.
+- NPC currently executes only `addi`, `jalr`, and `ebreak`; all other instructions halt as BAD unsupported/illegal instructions.
+- `debug_x1`, `debug_a0`, and `debug_trap_status` are temporary harness-visible check signals; later DiffTest/register dump support should replace ad hoc debug outputs.
+- `npc/tests/bin/addi.bin` and `npc/tests/bin/jalr-ebreak.bin` are raw binaries, not hex text parser inputs.
 - Verilator build output is still somewhat verbose on clean builds, but warnings are kept clean enough for `-Wall`.
 - `difftest_raise_intr()` in the NEMU REF shared object still asserts. Current normal NEMU trap execution supports the minimal AM `ecall`/`mret` path, but the REF external interrupt API is not implemented.
 - The current DiffTest register blob is still `DIFFTEST_REG_SIZE`, i.e. 32 riscv32 GPRs plus PC. CSR state is not included in the DiffTest copy/check contract yet.
@@ -152,14 +179,14 @@ Known caveats:
 
 Next work:
 
-Start `P2-S3: Control flow and trap termination (jalr, ebreak)`:
+Start `P2-S4: DPI-C data memory path and tiny load/store subset`:
 
-1. Implement `jalr` decode, writeback of `pc + 4`, and target PC calculation with bit 0 cleared.
-2. Implement `ebreak` detection and call/use the existing DPI-C trap path.
-3. Define the early GOOD/BAD convention, likely using `a0`/`x10` at `ebreak`.
-4. Add a small hand-built program that uses `addi`, `jalr`, and `ebreak` and terminates with `NPC_RESULT status=good`.
-5. Update the no-image smoke if needed so it keeps checking harness behavior without depending on unsupported-instruction halt semantics.
-6. Re-run `make -C npc smoke` and the new control-flow/trap test.
+1. Add a DPI-C `pmem_write()` path beside the existing `pmem_read()`.
+2. Route LSU data access through DPI-C memory rather than only fetching instructions through memory.
+3. Implement at least aligned `lw` and `sw` decode/execute behavior.
+4. Add a tiny hand-built memory program that stores a word, loads it back, checks the result through a register, and terminates with `ebreak` GOOD.
+5. Keep misalignment/access-fault behavior as a documented later gap unless it is cheap to represent cleanly in the early single-cycle harness.
+6. Re-run `make -C npc smoke`, `make -C npc test-addi`, `make -C npc test-jalr-ebreak`, and the new memory test.
 
 Relevant files:
 
@@ -176,10 +203,14 @@ Relevant files:
 - `npc/rtl/core/Ifu.v`
 - `npc/rtl/core/Idu.v`
 - `npc/rtl/core/RegFile.v`
+- `npc/rtl/core/Lsu.v`
 - `npc/csrc/main.cpp`
 - `npc/csrc/memory.cpp`
 - `npc/csrc/memory.h`
+- `npc/csrc/dpi.cpp`
+- `npc/csrc/dpi.h`
 - `npc/tests/bin/addi.bin`
+- `npc/tests/bin/jalr-ebreak.bin`
 - `nemu/.config` (generated/ignored local build config)
 - `nemu/src/filelist.mk`
 - `nemu/src/cpu/difftest/ref.c`

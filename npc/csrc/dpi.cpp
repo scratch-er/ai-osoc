@@ -2,6 +2,6 @@
 
 #include <cstdio>
 
-void npc_trap(int code) {
+extern "C" void npc_trap(int code) {
   std::printf("NPC_TRAP code=%d\n", code);
 }

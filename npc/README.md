@@ -2,7 +2,7 @@
 
 Initial Verilog NPC project for the RV32E_Zicsr core.
 
-Current status: P2-S2 minimal datapath. The RTL fetches instructions through DPI-C memory, executes RV32E `addi`, keeps `x0` immutable, and halts on unsupported instructions.
+Current status: P2-S3 control-flow/trap slice. The RTL fetches instructions through DPI-C memory, executes RV32E `addi` and `jalr`, keeps `x0` immutable, and terminates on `ebreak` with GOOD/BAD status from `a0` (`x10 == 0` means GOOD). Unsupported instructions halt with BAD status.
 
 ## Commands
 
@@ -24,6 +24,12 @@ Run the `addi` datapath regression:
 make -C npc test-addi
 ```
 
+Run the `jalr`/`ebreak` termination regression:
+
+```sh
+make -C npc test-jalr-ebreak
+```
+
 Run with an optional image, reset PC, cycle limit, and optional x1 check:
 
 ```sh
@@ -39,5 +45,5 @@ make -C npc TRACE=1 run ARGS="--wave --max-cycles 8"
 The simulator prints stable result lines of the form:
 
 ```text
-NPC_RESULT status=... cycles=... pc=... halted=... limit=... x1=...
+NPC_RESULT status=... cycles=... pc=... halted=... limit=... x1=... a0=... trap=...
 ```

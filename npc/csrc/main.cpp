@@ -17,6 +17,11 @@
 
 namespace {
 
+constexpr uint32_t NPC_STATUS_RUNNING = 0;
+constexpr uint32_t NPC_STATUS_GOOD = 1;
+constexpr uint32_t NPC_STATUS_BAD = 2;
+constexpr uint32_t NPC_STATUS_LIMIT = 3;
+
 struct Args {
   std::string image;
   uint64_t max_cycles = 100;
@@ -138,20 +143,30 @@ int main(int argc, char **argv) {
 
   bool limit = !top->debug_halted && cycles >= args.max_cycles;
   bool check_pass = !args.check_x1 || top->debug_x1 == args.expect_x1;
-  const char *status = check_pass ? (limit ? "limit" : "good") : "bad";
+  uint32_t trap_status = limit ? NPC_STATUS_LIMIT : top->debug_trap_status;
+  bool trap_pass = trap_status == NPC_STATUS_GOOD;
+  bool run_pass = check_pass && trap_pass;
+  const char *status = "bad";
+  if (limit) {
+    status = "limit";
+  } else if (run_pass) {
+    status = "good";
+  }
   if (args.check_x1) {
     std::printf("NPC_CHECK x1=0x%08x expect=0x%08x %s\n",
                 top->debug_x1,
                 args.expect_x1,
                 check_pass ? "PASS" : "FAIL");
   }
-  std::printf("NPC_RESULT status=%s cycles=%llu pc=0x%08x halted=%u limit=%llu x1=0x%08x\n",
+  std::printf("NPC_RESULT status=%s cycles=%llu pc=0x%08x halted=%u limit=%llu x1=0x%08x a0=0x%08x trap=%u\n",
               status,
               static_cast<unsigned long long>(cycles),
               top->debug_pc,
               top->debug_halted,
               static_cast<unsigned long long>(args.max_cycles),
-              top->debug_x1);
+              top->debug_x1,
+              top->debug_a0,
+              trap_status);
 
 #if VM_TRACE
   if (tfp) {
@@ -159,8 +174,5 @@ int main(int argc, char **argv) {
   }
 #endif
 
-  if (!check_pass) {
-    return 1;
-  }
-  return limit ? 1 : 0;
+  return run_pass ? 0 : 1;
 }

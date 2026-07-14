@@ -14,7 +14,7 @@ ifeq ($(TRACE),1)
 VERILATOR_FLAGS += --trace
 endif
 
-.PHONY: all run smoke test-addi clean
+.PHONY: all run smoke test-addi test-jalr-ebreak clean
 
 all: $(BIN)
 
@@ -28,13 +28,20 @@ run: $(BIN)
 smoke: $(BIN)
 	@out="$$($(BIN) --max-cycles 8 2>&1)"; \
 	printf '%s\n' "$$out"; \
-	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good cycles=1 pc=0x20000000 halted=1 limit=8 x1=0x00000000' >/dev/null
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=bad cycles=1 pc=0x20000000 halted=1 limit=8 x1=0x00000000 a0=0x00000000 trap=2' >/dev/null
 
 test-addi: $(BIN)
 	@out="$$($(BIN) --image tests/bin/addi.bin --max-cycles 8 --expect-x1 0x5 2>&1)"; \
 	printf '%s\n' "$$out"; \
 	printf '%s\n' "$$out" | grep 'NPC_CHECK x1=0x00000005 expect=0x00000005 PASS' >/dev/null; \
-	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good cycles=4 pc=0x2000000c halted=1 limit=8 x1=0x00000005' >/dev/null
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=bad cycles=4 pc=0x2000000c halted=1 limit=8 x1=0x00000005 a0=0x00000000 trap=2' >/dev/null
+
+test-jalr-ebreak: $(BIN)
+	@out="$$($(BIN) --image tests/bin/jalr-ebreak.bin --reset-pc 0x100 --max-cycles 16 --expect-x1 0x102 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_TRAP code=1' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_CHECK x1=0x00000102 expect=0x00000102 PASS' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good cycles=5 pc=0x00000120 halted=1 limit=16 x1=0x00000102 a0=0x00000000 trap=1' >/dev/null
 
 clean:
 	rm -rf $(BUILD_DIR)
