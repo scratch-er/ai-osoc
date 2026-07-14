@@ -130,6 +130,7 @@ Known caveats:
 
 - NPC currently executes only `addi`, `auipc`, `jal`, `jalr`, aligned `lw`, aligned `sw`, and `ebreak`; all other instructions halt as BAD unsupported/illegal instructions.
 - Memory access remains an early aligned 32-bit happy path. Misalignment, access faults, byte/halfword loads/stores, and byte masks remain later work.
+- Keep this through Phase 3 and Phase 4: Verilator assumes combinational reads/writes have no side effects and may simulate them in any order, including DPI-C calls. Do not model side-effectful emulated memory/peripherals as combinational DPI-C reads/writes; make side effects explicit, preferably clocked or otherwise ordered by the harness/interface.
 - NPC CommitEvent currently does not carry memory access info; `--mem-trace` still prints immediate memory read/write lines.
 - NEMU CommitEvent writeback inference is opcode-based and adequate for the current tiny RV32I subset; it should be refined when CSR/trap behavior becomes central in Phase 3.
 - NPC `log 1` and `trace on/off` stream CommitEvent lines, but filter parsing (`branches`, `loads`, `pc range`, etc.) remains future work.
@@ -145,14 +146,41 @@ Known caveats:
 - `abstract-machine/scripts/riscv32-nemu.mk` still defaults `CROSS_COMPILE := riscv64-linux-gnu-`; continue passing `CROSS_COMPILE=riscv64-elf-` unless the toolchain/default is changed.
 - Devices remain disabled; the minimal serial fallback is intentionally not a full device model.
 
+Phase 2 closeout status:
+
+- `P2-S8: Phase 2 closeout and Phase 3 handoff` was completed as a notes/planning session; no RTL/code changes were made in closeout.
+- Re-ran the full current NPC regression:
+
+  ```sh
+  make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-debug test-difftest
+  ```
+
+  Result: passed. Expected BAD smoke/addi illegal-instruction endings still serve as deliberate debug-path checks; jalr/ebreak, lw/sw, debug shell, memory trace, breakpoint, and tiny DiffTest tests pass.
+
+- Re-ran AM `dummy` through NPC:
+
+  ```sh
+  tmp=$(mktemp /tmp/am-dummy.XXXXXX.mk) && \
+  printf 'NAME = dummy\nSRCS = /Users/venti/Workspace/ai-ysyx/am-kernels/tests/cpu-tests/tests/dummy.c\ninclude /Users/venti/Workspace/ai-ysyx/abstract-machine/Makefile\n' > "$tmp" && \
+  make -f "$tmp" ARCH=riscv32e-npc AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine CROSS_COMPILE=riscv64-elf- run; \
+  status=$?; rm -f "$tmp"; exit $status
+  ```
+
+  Result: passed with `NPC_RESULT status=good reason=good_trap cycles=13 insts=13 pc=0x80000030 ... a0=0x00000000 trap=1`.
+
+- Disassembled `build/dummy-riscv32e-npc.elf`; the current dummy startup uses only `addi`, `auipc`, `jal`, `sw`, `jalr`/`ret`, and `ebreak`, which matches the implemented Phase 2 subset.
+- Tried a temporary `add` cpu-test build with only `add.c`, but it failed to compile because `trap.h` was not in the ad hoc source include path. For Phase 3 cpu-tests, either use the proper cpu-tests harness/include path or extend the temporary Makefile with the right include directories.
+- Reviewed `notes/npc-datapath-and-isa-plan.md`, `notes/nemu-rv32i-instruction-notes.md`, `specs/core.md`, and the current NPC skeleton. Updated `notes/plan.md` Phase 3 into a session-level plan that starts with a decode/control refactor before broad ISA expansion.
+
 Next work:
 
-Start `P2-S8: Phase 2 closeout and Phase 3 handoff`:
+Start `P3-S1: Decode/control refactor and first cpu-test beyond dummy`:
 
-1. Re-run all Phase 2 checks, including NPC regression and AM `dummy` through `ARCH=riscv32e-npc`.
-2. Decide the first Phase 3 RV32E instruction group from the AM dummy binary and likely cpu-test startup needs; likely start with direct calls/returns and integer immediates/loads/stores beyond the tiny subset.
-3. Update `notes/next.md` with exact closeout commands and first Phase 3 task.
-4. Do not broaden to all cpu-tests until Phase 3 instruction coverage is intentionally underway.
+1. Refactor `npc/rtl/core/Idu.v` from per-instruction booleans into compact control signals (`alu_op`, `branch_op`, `mem_size`, `wb_sel`, `csr_cmd`, `sys_cmd`, `illegal`) while preserving all current Phase 2 tests.
+2. Expand `Exu.v`/writeback for `lui`, remaining I-type ALU ops, and R-type ALU/compare/shift ops; keep it single-cycle.
+3. Keep RV32E illegal register checks for x16-x31 in decode/control.
+4. Add directed tiny tests first, then run the first non-`dummy` cpu-test slice with DiffTest where supported.
+5. Do not start AXI, icache, pipeline, or full CSR/trap work until the refactored integer datapath is stable.
 
 Relevant files:
 

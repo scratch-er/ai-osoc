@@ -253,39 +253,59 @@ Phase 2 exit criteria:
 
 ## Phase 3: RV32E_Zicsr Functional Core
 
-Goal: implement the full functional ISA subset required by `specs/core.md` before performance work.
+Goal: implement the full functional ISA subset required by `specs/core.md` before performance work, while refactoring the Phase 2 single-cycle skeleton just enough that later AXI, icache, and optional pipeline work do not require another rewrite.
 
 Relevant lecture guidance:
 
 - C2 RV32E implementation.
 - C5 CSR and exception handling.
 - RISC-V manual via lecture references.
+- B1 bus/AXI and B5 pipeline notes as forward-compatibility constraints, not as Phase 3 implementation scope.
 
-Tasks:
+Current skeleton constraints to address early:
 
-1. Implement RV32E GPR behavior with 16 registers and x0 hardwired to zero.
-2. Implement RV32E integer instruction classes needed by compiled workloads:
-   - U/J/B/I/R/S formats
-   - ALU, compare, shift, branches, jumps, loads, stores
-   - `fence` as nop
-   - `fence.i` initially as architectural hook, later tied to icache clear
-3. Complete Zicsr instructions and only the required CSRs; the minimal `ecall`/`mret` trap path should already exist from Phase 2 if AM workload bring-up needed it.
-4. Complete exception entry behavior for:
-   - instruction/load/store address misaligned
-   - instruction/load/store access fault
-   - illegal instruction
-   - breakpoint
-   - ecall from M-mode
-5. Complete `mret`; implement `wfi` as nop.
-6. Ensure unimplemented CSRs and illegal encodings raise illegal-instruction exception.
-7. Add alignment and access-fault plumbing from memory/bus responses.
-8. Integrate DiffTest against NEMU, comparing PC, GPRs, and implemented CSRs at instruction retirement.
-9. Run `cpu-tests` progressively and fix instruction bugs before adding more architecture.
+- `Core.v` currently wires one-bit-per-instruction decode (`is_addi`, `is_lw`, etc.) directly into PC, LSU, and writeback decisions. Phase 3 should replace this with compact IDU control signals (`alu_op`, `branch_op`, `mem_size`, `wb_sel`, `csr_cmd`, `sys_cmd`, `illegal`) before broadening instruction coverage.
+- `Exu.v` is only an adder and `Wbu.v` only forwards ALU/load data. Add explicit ALU/compare/writeback selection now, but keep it single-cycle and simple.
+- `Lsu.v` and the C++ memory path only support aligned 32-bit `lw`/`sw` and no byte strobes or access-fault signal. Add byte/halfword load-store formatting, alignment checks, and a DPI memory return status/strobe interface; this same shape should later map directly to AXI `WSTRB`/response handling.
+- `Ifu.v` is a combinational DPI read. Add explicit instruction alignment/access-fault signals and keep a `fence_i`/flush hook, but defer icache storage and burst refill to Phase 7.
+- Verilator assumes combinational reads/writes have no side effects and may simulate them in any order, including DPI-C calls. Phase 3/4 DPI memory and peripheral models must not rely on side effects from combinational DPI-C reads/writes; model side effects through explicit ordered/clocked operations or a harness protocol.
+- `NPC.v` top ports are still simulation/debug oriented and do not match the final AXI spec. Do not switch the top-level to AXI in Phase 3, but introduce internal request/response-style IFU/LSU boundaries so Phase 5 can replace DPI memory with AXI without changing decode/execute.
+- CommitEvent currently lacks memory and CSR details and NEMU writeback inference is opcode-based. Extend retire metadata only as needed for reliable DiffTest of new instructions and CSR/trap behavior.
+
+Sessions:
+
+1. **P3-S1: Decode/control refactor and first cpu-test beyond dummy**
+   - Refactor `Idu.v` to emit control signals and all immediate formats (`I/S/B/U/J`, CSR address/uimm) instead of one `is_*` wire per instruction.
+   - Keep existing `addi`, `auipc`, `jal`, `jalr`, `lw`, `sw`, and `ebreak` behavior passing.
+   - Add `lui`, the remaining I-type ALU ops, and R-type ALU/compare/shift ops needed by simple `cpu-tests` such as `add`, `sub-longlong`, `bit`, and `shift`.
+   - Preserve RV32E illegal checks for referenced x16-x31.
+   - Exit when the current Phase 2 regression plus at least the first non-`dummy` cpu-test slice passes with DiffTest where supported.
+
+2. **P3-S2: Branches and byte/halfword memory operations**
+   - Implement B-type branches (`beq`, `bne`, `blt`, `bge`, `bltu`, `bgeu`) with target alignment checks.
+   - Extend the memory interface to support `lb`, `lh`, `lbu`, `lhu`, `sb`, and `sh`, including byte strobes, sign/zero extension, and misalignment exceptions.
+   - Add or adapt tiny directed tests before relying only on compiled cpu-tests.
+   - Exit when representative branch and load/store cpu-tests pass, including `load-store`, `movsx`, `if-else`, and `unalign` behavior consistent with the spec.
+
+3. **P3-S3: System instructions, CSR file, and precise trap entry**
+   - Add `Csr.v` for `mvendorid`, `marchid`, `mstatus`, `mtvec`, `mepc`, and `mcause` only.
+   - Implement Zicsr operations with correct read/write suppression rules and illegal writes to read-only CSRs.
+   - Change `ecall`, architectural `ebreak`, illegal instruction, misaligned instruction/load/store, and access fault from immediate BAD halts into precise trap entry (`mepc`, `mcause`, `pc = mtvec`) while retaining a harness-controlled test-termination convention for AM `halt()`/tiny tests.
+   - Implement `mret`, `wfi` as nop, `fence` as nop, and `fence.i` as a visible no-state hook.
+   - Exit when directed CSR/trap tests pass and DiffTest can compare PC, RV32E GPRs, and implemented CSR state at retirement.
+
+4. **P3-S4: Progressive RV32E cpu-tests regression and DiffTest hardening**
+   - Run the non-M-extension cpu-tests progressively through `ARCH=riscv32e-npc` using the temporary Makefile/`printf` workaround as needed.
+   - Fix instruction/CSR/trap bugs from failing tests rather than adding unrelated features.
+   - Extend CommitEvent/NEMU REF comparison where needed, especially for traps and CSR writes.
+   - Keep M-extension tests out of scope and document any device/runtime blockers separately.
+   - Exit when the RV32E-relevant cpu-test set passes on NPC with DiffTest enabled where practical.
 
 Exit criteria:
 
-- RV32E-targeted `cpu-tests` pass on NPC with DiffTest enabled.
-- CSR/trap tests for required behavior pass or are documented if not yet available.
+- RV32E-targeted `cpu-tests` pass on NPC with DiffTest enabled where practical.
+- Required CSR/trap behavior has directed tests and current pass/fail status.
+- The internal IFU/LSU/control interfaces are ready to evolve toward AXI/icache and an optional pipeline without another decode/datapath rewrite.
 
 ## Phase 4: AM Runtime and Essential Workloads
 

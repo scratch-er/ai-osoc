@@ -304,6 +304,7 @@ Start single-cycle architecturally, but use valid/ready-like boundaries where th
 - Generate byte write strobe for stores.
 - Load data is selected from returned word according to address low bits, then sign/zero-extended.
 - Early DPI memory can accept byte strobes; later AXI path maps these to `WSTRB`.
+- Verilator assumes combinational reads/writes have no side effects and may simulate them in any order, including DPI-C functions. Do not implement UART, CLINT, memory-mapped devices, or fault/status updates as side effects of combinational DPI-C reads/writes; use explicit ordered/clocked operations or a harness protocol for side-effectful behavior.
 - Do not add a data cache.
 
 ### CSR and traps
