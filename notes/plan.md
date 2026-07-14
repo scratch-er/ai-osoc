@@ -350,12 +350,12 @@ Phase decisions and constraints:
 
 Sessions:
 
-1. **P4-S1: AM/NEMU/NPC device audit and baselines**
-   - Inspect current `riscv32e-npc` AM files, NPC MMIO/memory path, NEMU device configuration/framework, linker scripts, startup/trap code, and relevant `am-kernels` test entry points.
-   - Re-run the known-good Phase 3 checks: NPC regression and full cpu-tests with DiffTest, using the commands in `notes/next.md`.
-   - Identify the current UART and CLINT/timer gaps in both NPC and NEMU: missing AM `putch()`, IOE stubs, device mapping, build config, and run commands.
-   - Record the exact first failing commands for `hello`, an AM timer test, and a NEMU-device smoke attempt.
-   - Exit when the UART/CLINT work queue is grounded in current failures, not assumptions.
+1. **P4-S1: AM/NEMU/NPC device audit and baselines** — completed
+   - Inspected current `riscv32e-npc` AM files, NPC MMIO/memory path, NEMU device configuration/framework, linker scripts, startup/trap code, and relevant `am-kernels` test entry points.
+   - Re-ran the known-good Phase 3 checks: NPC regression and full cpu-tests with DiffTest, using the commands in `notes/next.md`.
+   - Identified the current UART and CLINT/timer gaps in both NPC and NEMU: missing AM `putch()`, IOE stubs, device mapping, build config, and run commands.
+   - Recorded the exact first failing commands for `hello`, AM timer/devscan tests, and NEMU smoke attempts in `notes/next.md`.
+   - Exit status: Phase 3 directed regression and all 35 cpu-tests with DiffTest still pass; NPC `hello` terminates good but prints nothing because `putch()` is empty; AM timer/devscan are bounded failures; NEMU `hello` passes only when overriding the stale `-l` run flag.
 
 2. **P4-S2: NPC ordered UART MMIO and AM `putch()`**
    - Add NPC simulation UART output at `0x10000000` with byte/word write-mask handling and deterministic ordering.
