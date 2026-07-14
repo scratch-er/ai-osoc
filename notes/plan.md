@@ -147,33 +147,102 @@ Phase 1 exit criteria:
 
 ## Phase 2: Initial NPC RTL and Simulation Harness
 
-Goal: create a minimal, maintainable RTL core and Verilator harness that can execute tiny programs to `ebreak`.
+Goal: create a Verilog-based, maintainable single-cycle NPC skeleton and Verilator harness that can execute tiny programs to `ebreak`, then hand off to Phase 3 for full RV32E_Zicsr functionality.
 
 Relevant lecture guidance:
 
-- D4 modular RTL minirv processor.
-- C2 RV32E single-cycle NPC infrastructure.
+- D4 modular RTL minirv processor:
+  - divide the design into IFU, IDU, EXU, LSU, WBU-style modules or similarly clear boundaries;
+  - start from `addi`, then `jalr`, then `ebreak` via DPI-C;
+  - use C++/DPI-C memory instead of an RTL memory array for early simulation;
+  - add program image loading, AM `halt()` through `ebreak`, and HIT GOOD/BAD reporting.
+- C2 RV32E single-cycle NPC infrastructure:
+  - build NPC-side debugging infrastructure before adding many instructions;
+  - add register/memory inspection hooks, concise trace support, and DiffTest early;
+  - use NEMU as REF because RV32E programs can run on the existing RV32 NEMU reference.
+- `specs/core.md`:
+  - target ISA is RV32E_Zicsr;
+  - reset address is configurable, default `0x20000000`;
+  - final top-level interface must match the AXI-oriented spec, but Phase 2 may use a simpler DPI-C memory boundary while preserving interfaces that can later become bus/AXI requests.
 
-Tasks:
+Implementation style decision:
 
-1. Establish `npc/` project structure if absent.
-2. Choose RTL implementation style based on existing repository/tooling; prefer simple, explicit modules.
-3. Build a Verilator harness with:
-   - program image loading
-   - cycle limit
-   - `ebreak`/trap based termination
-   - HIT GOOD/BAD style result
-   - optional waveform switch
-4. Implement a minimal datapath first: PC, register file, instruction fetch, decode, ALU, writeback.
-5. Start with a tiny subset (`addi`, `jalr`, `ebreak`) only to validate the harness.
-6. Add the minimal trap/CSR path early enough for AM workloads that use `ecall`: `mtvec`, `mepc`, `mcause`, M-mode `ecall` entry, and `mret`. Keep this simple before expanding to full exception coverage.
-7. Add DPI-C or equivalent simulation hooks for memory access and trap reporting.
-8. Keep reset address configurable; default toward `0x20000000` per `specs/core.md`, while allowing test/SoC-specific overrides.
+- Use **Verilog** for NPC. Chisel remains possible later, but Verilog is the default for Phase 2 because it is simpler to inspect, has broader AI training coverage, and avoids generator-layer debugging during initial bring-up.
 
-Exit criteria:
+Sessions:
 
-- A small hand-built program executes and stops via `ebreak`.
-- Simulation result is machine-readable enough for automated checking.
+1. **P2-S1: NPC project skeleton and Verilator harness**
+   - Create `npc/` with Verilog RTL, C++ simulation, Makefile/scripts, and a small tests directory.
+   - Add a top module with clock/reset, configurable reset PC parameter, and minimal simulation-visible state.
+   - Add a Verilator harness with:
+     - image loading at a configurable base address;
+     - cycle/instruction limit;
+     - optional waveform switch;
+     - stable machine-readable result lines, e.g. `NPC_RESULT status=...`.
+   - Add a tiny hand-written binary or hex test mechanism before depending on AM.
+   - Exit when `make` can build the simulator and a reset/empty-run smoke test behaves deterministically.
+
+2. **P2-S2: Minimal execution datapath (`addi`)**
+   - Implement the first simple single-cycle datapath: PC, RV32E register file with 16 GPRs, instruction fetch, immediate decode, ALU add, writeback, and `pc + 4`.
+   - Use DPI-C/C++ memory reads for instruction fetch, following D4's early-memory approach.
+   - Add a small `addi` test that checks x0 immutability and a nonzero register result through a simulation-side check or trace.
+   - Keep module boundaries explicit enough to evolve into IFU/IDU/EXU/WBU.
+   - Exit when the `addi` test passes without manual waveform inspection.
+
+3. **P2-S3: Control flow and trap termination (`jalr`, `ebreak`)**
+   - Implement `jalr` and PC redirection.
+   - Implement `ebreak` detection and DPI-C trap reporting to the C++ harness.
+   - Report HIT GOOD/BAD style status using a simple convention, such as checking the value in `a0`/`x10` when `ebreak` retires.
+   - Add a small hand-built program that uses `addi`, `jalr`, and `ebreak` and terminates automatically.
+   - Exit when the simulator can run until program-controlled `ebreak` and emit `NPC_RESULT status=good`.
+
+4. **P2-S4: DPI-C data memory path and tiny load/store subset**
+   - Replace any remaining top-level ad hoc memory wiring with DPI-C `pmem_read()`/`pmem_write()` for both instruction fetch and data access.
+   - Implement enough load/store behavior to validate the memory path, starting with word-aligned `lw`/`sw` and byte-mask plumbing if needed.
+   - Keep the DPI memory functions 32-bit aligned internally, matching D4's advice so later bus work does not require a full rewrite.
+   - Add a tiny memory test that writes, reads, and terminates via `ebreak`.
+   - Exit when a hand-written memory program passes with concise output.
+
+5. **P2-S5: NPC debug infrastructure baseline**
+   - Add minimal non-interactive debug hooks before broad ISA work:
+     - register dump on failure;
+     - bounded recent-PC/instruction trace;
+     - memory access trace switch or compile/runtime flag;
+     - optional single-step harness mode if cheap.
+   - Avoid a full human-oriented sdb unless it directly helps automation.
+   - Keep normal passing output concise.
+   - Exit when an injected wrong result or illegal/hanging test produces enough bounded context to debug without opening a waveform first.
+
+6. **P2-S6: Early DiffTest hookup against NEMU REF**
+   - Link the NPC simulator with `nemu/build/riscv32-nemu-interpreter-so`.
+   - Reuse the Phase 1 REF APIs: `difftest_memcpy`, `difftest_regcpy`, and `difftest_exec`.
+   - Define the initial comparison contract as PC plus the architectural RV32E-visible GPR subset; ignore x16-x31 or require them to remain zero/unused for RV32E tests.
+   - Add command-line switches to enable/disable DiffTest and to initialize REF memory/register state from the NPC run.
+   - Inject a temporary `addi` bug only during validation, then remove it, to confirm DiffTest reports mismatches.
+   - Exit when the tiny `addi`/`jalr`/`ebreak` programs pass with DiffTest enabled and a deliberate mismatch is caught.
+
+7. **P2-S7: Minimal AM `riscv32e-npc` run path**
+   - Inspect existing AM support and add only the missing pieces needed for one-command NPC runs.
+   - Provide a `run` target for `ARCH=riscv32e-npc` that invokes the NPC simulator with the built image and a limit.
+   - Implement or adjust AM `halt()` for NPC so it uses `ebreak` and passes the result code to the harness.
+   - Start with `dummy`; do not broaden to all cpu-tests in this phase unless the tiny core already supports the required instructions.
+   - Exit when an AM `dummy`-style workload can be built and run on NPC with automatic GOOD/BAD reporting, or when the remaining blocker is narrowed to missing Phase 3 ISA coverage.
+
+8. **P2-S8: Phase 2 closeout and Phase 3 handoff**
+   - Re-run all Phase 2 checks: harness smoke, `addi`, control-flow/trap, memory test, DiffTest tiny tests, and AM `dummy` if available.
+   - Update `notes/next.md` with exact commands, pass/fail status, known limitations, and the first Phase 3 instruction group to implement.
+   - Keep the handoff focused: no broad RV32E implementation in this phase unless it is necessary to make the Phase 2 harness trustworthy.
+   - Exit when the NPC skeleton is stable enough for Phase 3 RV32E_Zicsr expansion.
+
+Phase 2 exit criteria:
+
+- `npc/` exists and builds with Verilator from one command.
+- The simulator can load an image, enforce a limit, optionally dump waves, and emit machine-readable `NPC_RESULT` lines.
+- A minimal single-cycle Verilog datapath executes tiny programs through `addi`, `jalr`, `ebreak`, and a small aligned memory-access subset.
+- DPI-C memory and trap hooks are in place.
+- Basic failure-oriented traces/register dumps exist and stay concise by default.
+- Early DiffTest against the NEMU REF shared object works for the implemented tiny subset.
+- AM `riscv32e-npc` has an initial run path or a precisely documented blocker for Phase 3.
 
 ## Phase 3: RV32E_Zicsr Functional Core
 
