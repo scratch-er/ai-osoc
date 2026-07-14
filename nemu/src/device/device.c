@@ -16,7 +16,7 @@
 #include <common.h>
 #include <utils.h>
 #include <device/alarm.h>
-#ifndef CONFIG_TARGET_AM
+#if !defined(CONFIG_TARGET_AM) && (defined(CONFIG_HAS_VGA) || defined(CONFIG_HAS_KEYBOARD))
 #include <SDL2/SDL.h>
 #endif
 
@@ -43,7 +43,7 @@ void device_update() {
 
   IFDEF(CONFIG_HAS_VGA, vga_update_screen());
 
-#ifndef CONFIG_TARGET_AM
+#if !defined(CONFIG_TARGET_AM) && (defined(CONFIG_HAS_VGA) || defined(CONFIG_HAS_KEYBOARD))
   SDL_Event event;
   while (SDL_PollEvent(&event)) {
     switch (event.type) {
@@ -67,7 +67,7 @@ void device_update() {
 }
 
 void sdl_clear_event_queue() {
-#ifndef CONFIG_TARGET_AM
+#if !defined(CONFIG_TARGET_AM) && (defined(CONFIG_HAS_VGA) || defined(CONFIG_HAS_KEYBOARD))
   SDL_Event event;
   while (SDL_PollEvent(&event));
 #endif

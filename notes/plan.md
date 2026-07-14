@@ -374,12 +374,14 @@ Sessions:
    - Re-ran the NPC build, AM `hello`, directed NPC regression, and the full 35-test cpu-tests sweep with NEMU event DiffTest; all required regressions passed.
    - Exit status: P4-S3 is complete; the timer remains a temporary retired-instruction model, not the final physical cycle-based CLINT.
 
-4. **P4-S4: NEMU device support for UART and temporary timer**
-   - Enable or repair NEMU device support using NEMU's existing device framework, not a parallel ad hoc implementation.
-   - Add or configure UART output and deterministic timer behavior compatible with the AM tests used for NPC where practical.
-   - Keep macOS SDL/device caveats isolated: UART/timer should not require optional graphical SDL devices.
-   - Run the same hello/timer-style AM workloads on `riscv32-nemu` or the relevant NEMU AM target and compare behavior against NPC at the workload-observable level.
-   - Exit when NEMU can serve as a device-capable reference for UART/timer AM workloads, or when a narrow device-framework blocker is documented.
+4. **P4-S4: NEMU device support for UART and temporary timer** — completed
+   - Enabled NEMU native device support for UART and timer only, with keyboard/VGA/audio/disk disabled so macOS builds do not require SDL for this slice.
+   - Kept UART/timer on NEMU's existing MMIO device framework at `0xa00003f8` and `0xa0000048`.
+   - Made the NEMU RTC timer deterministic for this phase by deriving microseconds from retired instruction count (`g_nr_guest_inst / 100`), matching the temporary 100 MHz timing model used by AM timer tests.
+   - Updated AM's NEMU platform timer implementation to read the RTC MMIO pair and report a simple 1900-01-01 RTC derived from uptime.
+   - Removed the stale `-l` flag from the AM NEMU run path because the current NEMU monitor does not support it.
+   - Added NEMU RV32M integer multiply/divide decode support needed by current `riscv32-nemu` AM timer workloads compiled with `-march=rv32im_zicsr`.
+   - Exit status: NEMU `hello` prints through UART and exits good; NEMU devscan/RTC timer smokes show timer progression with bounded/expected terminal statuses; NPC directed regression and all 35 cpu-tests with NEMU event DiffTest still pass.
 
 5. **P4-S5: Klib completion pass for essential workloads**
    - Audit remaining klib gaps hit by `hello`, timer tests, `yield-os`, and nearby AM workloads.
