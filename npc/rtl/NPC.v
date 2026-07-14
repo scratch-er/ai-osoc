@@ -8,7 +8,8 @@ module NPC #(
   input         io_interrupt,
   input  [31:0] io_reset_pc,
   output [31:0] debug_pc,
-  output        debug_halted
+  output        debug_halted,
+  output [31:0] debug_x1
 );
 
   wire unused_interrupt = io_interrupt;
@@ -20,7 +21,8 @@ module NPC #(
     .reset(reset),
     .reset_pc(io_reset_pc),
     .debug_pc(debug_pc),
-    .debug_halted(debug_halted)
+    .debug_halted(debug_halted),
+    .debug_x1(debug_x1)
   );
 
 endmodule

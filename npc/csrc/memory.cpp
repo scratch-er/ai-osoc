@@ -3,6 +3,10 @@
 #include <cstdio>
 #include <cstring>
 
+namespace {
+Memory *pmem = nullptr;
+}
+
 Memory::Memory(uint32_t base_addr, uint32_t size)
     : base_addr_(base_addr), data_size_(size), data_(new uint8_t[size]) {
   std::memset(data_, 0, data_size_);
@@ -47,4 +51,29 @@ bool Memory::load_image(const std::string &path) {
 
   std::printf("NPC_IMAGE path=%s base=0x%08x size=%ld\n", path.c_str(), base_addr_, image_size);
   return true;
+}
+
+uint32_t Memory::read32(uint32_t addr) const {
+  if (!contains(addr, 4)) {
+    std::fprintf(stderr, "pmem read out of bounds: addr=0x%08x\n", addr);
+    return 0;
+  }
+
+  uint32_t off = addr - base_addr_;
+  return static_cast<uint32_t>(data_[off]) |
+         (static_cast<uint32_t>(data_[off + 1]) << 8) |
+         (static_cast<uint32_t>(data_[off + 2]) << 16) |
+         (static_cast<uint32_t>(data_[off + 3]) << 24);
+}
+
+void set_pmem(Memory *memory) {
+  pmem = memory;
+}
+
+extern "C" uint32_t pmem_read(uint32_t addr) {
+  if (pmem == nullptr) {
+    std::fprintf(stderr, "pmem_read called before memory is initialized\n");
+    return 0;
+  }
+  return pmem->read32(addr);
 }

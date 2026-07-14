@@ -12,11 +12,16 @@ public:
   uint32_t base() const { return base_addr_; }
   uint32_t size() const { return static_cast<uint32_t>(data_size_); }
   bool contains(uint32_t addr, uint32_t len) const;
+  uint32_t read32(uint32_t addr) const;
 
 private:
   uint32_t base_addr_;
   uint32_t data_size_;
   uint8_t *data_;
 };
+
+void set_pmem(Memory *memory);
+
+extern "C" uint32_t pmem_read(uint32_t addr);
 
 #endif

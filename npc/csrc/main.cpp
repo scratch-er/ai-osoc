@@ -22,10 +22,12 @@ struct Args {
   uint64_t max_cycles = 100;
   uint32_t reset_pc = 0x20000000u;
   bool wave = false;
+  bool check_x1 = false;
+  uint32_t expect_x1 = 0;
 };
 
 void usage(const char *prog) {
-  std::printf("Usage: %s [--image FILE] [--max-cycles N] [--reset-pc HEX] [--wave]\n", prog);
+  std::printf("Usage: %s [--image FILE] [--max-cycles N] [--reset-pc HEX] [--expect-x1 HEX] [--wave]\n", prog);
 }
 
 bool parse_u64(const char *s, uint64_t *value) {
@@ -54,6 +56,14 @@ bool parse_args(int argc, char **argv, Args *args) {
         return false;
       }
       args->reset_pc = static_cast<uint32_t>(value);
+    } else if (std::strcmp(argv[i], "--expect-x1") == 0 && i + 1 < argc) {
+      uint64_t value = 0;
+      if (!parse_u64(argv[++i], &value)) {
+        std::fprintf(stderr, "invalid --expect-x1\n");
+        return false;
+      }
+      args->check_x1 = true;
+      args->expect_x1 = static_cast<uint32_t>(value);
     } else if (std::strcmp(argv[i], "--wave") == 0) {
       args->wave = true;
     } else if (std::strcmp(argv[i], "--help") == 0) {
@@ -79,6 +89,7 @@ int main(int argc, char **argv) {
   }
 
   Memory memory(args.reset_pc);
+  set_pmem(&memory);
   if (!memory.load_image(args.image)) {
     std::printf("NPC_RESULT status=bad reason=image_load_failed cycles=0 pc=0x%08x\n", args.reset_pc);
     return 1;
@@ -120,18 +131,27 @@ int main(int argc, char **argv) {
   top->reset = 0;
 
   uint64_t cycles = 0;
-  while (!Verilated::gotFinish() && cycles < args.max_cycles) {
+  while (!Verilated::gotFinish() && !top->debug_halted && cycles < args.max_cycles) {
     eval_cycle();
     cycles++;
   }
 
-  const char *status = (cycles >= args.max_cycles) ? "limit" : "good";
-  std::printf("NPC_RESULT status=%s cycles=%llu pc=0x%08x halted=%u limit=%llu\n",
+  bool limit = !top->debug_halted && cycles >= args.max_cycles;
+  bool check_pass = !args.check_x1 || top->debug_x1 == args.expect_x1;
+  const char *status = check_pass ? (limit ? "limit" : "good") : "bad";
+  if (args.check_x1) {
+    std::printf("NPC_CHECK x1=0x%08x expect=0x%08x %s\n",
+                top->debug_x1,
+                args.expect_x1,
+                check_pass ? "PASS" : "FAIL");
+  }
+  std::printf("NPC_RESULT status=%s cycles=%llu pc=0x%08x halted=%u limit=%llu x1=0x%08x\n",
               status,
               static_cast<unsigned long long>(cycles),
               top->debug_pc,
               top->debug_halted,
-              static_cast<unsigned long long>(args.max_cycles));
+              static_cast<unsigned long long>(args.max_cycles),
+              top->debug_x1);
 
 #if VM_TRACE
   if (tfp) {
@@ -139,5 +159,8 @@ int main(int argc, char **argv) {
   }
 #endif
 
-  return cycles >= args.max_cycles ? 1 : 0;
+  if (!check_pass) {
+    return 1;
+  }
+  return limit ? 1 : 0;
 }
