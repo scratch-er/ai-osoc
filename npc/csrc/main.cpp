@@ -130,6 +130,7 @@ public:
   void reset() {
     cycles_ = 0;
     retire_ = 0;
+    memory_.set_time(0);
     top_.reset = 1;
     top_.io_interrupt = 0;
     top_.io_reset_pc = args_.reset_pc;
@@ -160,6 +161,7 @@ public:
       cycles_++;
       ring_.push(ev);
       retire_++;
+      memory_.set_time(retire_);
       if (commit_mem_wen) {
         memory_.commit_mmio_write(commit_mem_addr, commit_mem_wdata, commit_mem_wmask);
       }

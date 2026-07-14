@@ -365,13 +365,14 @@ Sessions:
    - Re-ran the NPC directed regression and full 35-test cpu-tests sweep with NEMU event DiffTest; all passed.
    - Exit status: P4-S2 is complete; `am-tests mainargs=d` now prints through UART but remains bounded by the still-stubbed timer, which is the next P4-S3 task.
 
-3. **P4-S3: Temporary retired-instruction timer and AM IOE timer**
-   - Implement the Phase 4 simulation timer model needed now: expose `mtime`/`mtimeh` through the CLINT MMIO addresses used by AM, but advance the value deterministically by retired-instruction count rather than by physical core cycles.
-   - Make the temporary timer usable with current DiffTest. If NEMU REF is involved, keep its timer behavior aligned with the same deterministic retired-instruction notion, or keep timer MMIO out of compared REF device side effects.
-   - Ignore `mtimecmp`, `mtimecmph`, and `msip` writes/reads as specified; do not add interrupt behavior.
-   - Implement `ioe_init()`, UART abstract register support if needed, and AM timer reads for `riscv32e-npc`; convert the deterministic counter to time using the 100 MHz assumption for Phase 4 workloads.
-   - Run existing `am-tests` timer/RTC tests that can complete without interrupts; if a test is interactive or indefinite, use an existing bounded variant or document the limitation.
-   - Exit when AM can read a monotonically increasing uptime/RTC value on NPC, a timer test passes reproducibly, and the temporary-not-physical timer limitation is recorded.
+3. **P4-S3: Temporary retired-instruction timer and AM IOE timer** — completed
+   - Added a Phase 4 simulation CLINT model in the NPC harness: `mtime`/`mtimeh` are exposed at `0x0200bff8`/`0x0200bffc` and advance deterministically by retired instruction count rather than by physical core cycles.
+   - Kept CLINT writes and other CLINT reads side-effect-free/ignored; no interrupt behavior was added.
+   - Updated `abstract-machine/am/src/riscv/npc/timer.c` to read `mtime` robustly and convert ticks to microseconds using the 100 MHz AM platform assumption.
+   - Validated `am-tests mainargs=d` as a bounded timer/devscan smoke: it prints `Loop 10^7 time elapse: 500 ms` before later optional device probing reaches the existing nonimplemented-device panic.
+   - Validated `am-tests mainargs=t` as a bounded RTC smoke: it prints the first one-second line before the intentionally infinite RTC loop hits the cycle limit.
+   - Re-ran the NPC build, AM `hello`, directed NPC regression, and the full 35-test cpu-tests sweep with NEMU event DiffTest; all required regressions passed.
+   - Exit status: P4-S3 is complete; the timer remains a temporary retired-instruction model, not the final physical cycle-based CLINT.
 
 4. **P4-S4: NEMU device support for UART and temporary timer**
    - Enable or repair NEMU device support using NEMU's existing device framework, not a parallel ad hoc implementation.

@@ -2,7 +2,7 @@
 
 Initial Verilog NPC project for the RV32E_Zicsr core.
 
-Current status: Phase 4 is complete through `P4-S2: NPC ordered UART MMIO and AM putch()`. The RTL fetches instructions through DPI-C memory, executes RV32E `lui`, `auipc`, `jal`, `jalr`, B-type branches with target-alignment checks, `lb`/`lh`/`lw`/`lbu`/`lhu`, `sb`/`sh`/`sw`, the RV32E integer ALU/compare/shift subset, Zicsr for the required M-mode CSRs, `ecall`, architectural `ebreak`, `mret`, `wfi`, `fence`, and `fence.i`. It keeps `x0` immutable, implements precise trap entry when `mtvec` is nonzero, preserves the test-harness `ebreak` GOOD/BAD termination convention when `mtvec == 0`, and emits committed UART writes to MMIO address `0x10000000` in retirement order.
+Current status: Phase 4 is complete through `P4-S3: Temporary retired-instruction timer and AM IOE timer`. The RTL fetches instructions through DPI-C memory, executes RV32E `lui`, `auipc`, `jal`, `jalr`, B-type branches with target-alignment checks, `lb`/`lh`/`lw`/`lbu`/`lhu`, `sb`/`sh`/`sw`, the RV32E integer ALU/compare/shift subset, Zicsr for the required M-mode CSRs, `ecall`, architectural `ebreak`, `mret`, `wfi`, `fence`, and `fence.i`. It keeps `x0` immutable, implements precise trap entry when `mtvec` is nonzero, preserves the test-harness `ebreak` GOOD/BAD termination convention when `mtvec == 0`, emits committed UART writes to MMIO address `0x10000000` in retirement order, and exposes a temporary CLINT `mtime`/`mtimeh` model at `0x0200bff8`/`0x0200bffc` that advances by retired instruction count for AM timer smoke tests.
 
 The C++ Verilator harness now centers debugging around retired-instruction `CommitEvent`s. It has a scriptable command shell, bounded `last [n]` history, stable `NPC_RESULT`/`NPC_CSR` lines, and event-sequence DiffTest against the NEMU REF shared object when the REF exports `difftest_step_event()`.
 
@@ -53,6 +53,13 @@ Run AM `hello` through the committed UART MMIO path:
 ```sh
 make -C am-kernels/kernels/hello ARCH=riscv32e-npc \
   AM_HOME=/path/to/abstract-machine CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=200000 run
+```
+
+Run the bounded AM timer/devscan smoke through the temporary retired-instruction timer:
+
+```sh
+make -C am-kernels/tests/am-tests ARCH=riscv32e-npc \
+  AM_HOME=/path/to/abstract-machine CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=80000000 mainargs=d run
 ```
 
 `abstract-machine/scripts/platform/npc.mk` builds `npc/build/npc` automatically and runs it with `--reset-pc 0x80000000`. Override `NPC_HOME`, `NPC_SIM`, `NPC_RESET_PC`, or `NPC_MAX_CYCLES` if needed.

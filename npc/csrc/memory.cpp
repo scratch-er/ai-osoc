@@ -5,6 +5,10 @@
 
 namespace {
 constexpr uint32_t UART_BASE = 0x10000000u;
+constexpr uint32_t CLINT_BASE = 0x02000000u;
+constexpr uint32_t CLINT_END = 0x02010000u;
+constexpr uint32_t CLINT_MTIME = CLINT_BASE + 0xbff8u;
+constexpr uint32_t CLINT_MTIMEH = CLINT_BASE + 0xbffcu;
 Memory *pmem = nullptr;
 }
 
@@ -72,6 +76,20 @@ void Memory::copy_to(void *dst, uint32_t addr, uint32_t len) const {
 }
 
 uint32_t Memory::read32(uint32_t addr) const {
+  if (addr == CLINT_MTIME || addr == CLINT_MTIMEH) {
+    uint32_t data = (addr == CLINT_MTIME) ? static_cast<uint32_t>(time_)
+                                          : static_cast<uint32_t>(time_ >> 32);
+    if (trace_) {
+      std::printf("NPC_MMIO r addr=0x%08x data=0x%08x\n", addr, data);
+    }
+    return data;
+  }
+  if (addr >= CLINT_BASE && addr < CLINT_END) {
+    if (trace_) {
+      std::printf("NPC_MMIO r addr=0x%08x data=0x00000000\n", addr);
+    }
+    return 0;
+  }
   if (!contains(addr, 4)) {
     std::fprintf(stderr, "pmem read out of bounds: addr=0x%08x\n", addr);
     return 0;
@@ -89,7 +107,7 @@ uint32_t Memory::read32(uint32_t addr) const {
 }
 
 void Memory::write32(uint32_t addr, uint32_t data, uint8_t wmask) {
-  if (addr == UART_BASE) {
+  if (addr == UART_BASE || (addr >= CLINT_BASE && addr < CLINT_END)) {
     if (trace_) {
       std::printf("NPC_MMIO w addr=0x%08x data=0x%08x mask=0x%x\n", addr, data, wmask & 0xf);
     }
