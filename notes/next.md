@@ -102,13 +102,21 @@ Known caveats:
 
 Next work:
 
-Start Phase 4 (`AM Runtime and Essential Workloads`):
+Phase 4 (`AM Runtime and Essential Workloads`) has now been revised again in `notes/plan.md` for user review. Before implementing, let the user revise the plan.
 
-1. Implement a simple UART output path for NPC simulation, likely MMIO at `0x10000000`, with side effects ordered outside combinational DPI reads/writes.
-2. Update `abstract-machine/am/src/riscv/npc/trm.c` `putch()` to write to that UART path.
-3. Run `am-kernels/kernels/hello` through `ARCH=riscv32e-npc` and verify visible serial output plus good trap.
-4. Add/verify CLINT/timer simulation after UART works.
-5. Then move to AM timer tests and the first `rt-thread-am` milestone.
+Important planning decisions now recorded:
+
+1. Phase 4 should implement UART output and a temporary DiffTest-friendly timer first; defer broad RT-Thread debugging until those basics are stable.
+2. UART input is out of scope for Phase 4 because no Phase 4 workload needs it.
+3. NPC UART output remains planned at `0x10000000`, with side effects ordered outside unordered combinational DPI reads/writes.
+4. Phase 4 timer support should expose `mtime`/`mtimeh` but advance deterministically by retired-instruction count, not physical core cycles, so current DiffTest remains usable; convert it by AM with the 100 MHz assumption and do not add timer interrupts.
+5. NEMU may be modified to support UART/temporary timer devices, preferably through its existing device framework.
+6. Simulation termination on `ebreak` happens in the harness when detecting that an `ebreak` retired, not in an AM trap handler.
+7. Use existing `am-kernels` workloads such as `yield-os` for CTE validation; do not create a custom CTE workload unless existing tests cannot isolate a confirmed bug.
+8. AM klib can be completed by copying/adapting Sonnet libc (`https://gitlink.org.cn/foobat/sonnet-libc`) when needed.
+9. Proper physical CLINT must wait until Phase 5 device-aware DiffTest replay is implemented: REF peripherals off/suppressed, DUT MMIO read values captured, and those MMIO inputs replayed to REF.
+
+After review, start with `P4-S1: AM/NEMU/NPC device audit and baselines`, then proceed to NPC UART/hello.
 
 Relevant files:
 

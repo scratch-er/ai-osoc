@@ -309,39 +309,117 @@ Exit criteria:
 
 ## Phase 4: AM Runtime and Essential Workloads
 
-Goal: make normal bare-metal workloads build and run on NPC through AM.
+Goal: make the essential AM runtime path work on both NPC and NEMU with UART and CLINT/timer support, then use existing AM workloads to validate the foundation before broader CTE/RT-Thread work.
 
-Relevant lecture guidance:
+Relevant references:
 
-- D4 AM runtime for NPC.
-- C2 `riscv32e-npc` AM support.
-- D5 UART/timer basics.
-- C5 RT-Thread support.
+- `specs/abstract-machine/README.md`:
+  - port TRM, UART, uptime timer, CTE, klib, and build-system support for `riscv32e-npc`;
+  - assume the NPC platform frequency is 100 MHz for AM time conversion;
+  - AM already has a built-in libc layer, klib, to complete; implementation can be copied/adapted from Sonnet libc (`https://gitlink.org.cn/foobat/sonnet-libc`) when needed.
+- `specs/abstract-machine/specifications.md`:
+  - TRM: `putch()`, `halt()`, heap, and `mainargs` contract;
+  - IOE: `ioe_init()`, `ioe_read()`, `ioe_write()`, especially UART and timer abstract registers;
+  - CTE: `cte_init()`, `yield()`, `kcontext()`, event dispatch, and context lifetime rules.
+- PA2.3 / PA2.5:
+  - AM runtime, klib, IOE abstraction, UART output, timer/RTC tests, and NEMU's device framework.
+- PA3.1 and PA4.1:
+  - exception/trap control flow and CTE validation using existing AM workloads such as `yield-os`.
+- D5:
+  - early NPC simulation may model UART/timer through DPI-C/MMIO before real bus devices exist;
+  - UART address can be `0x10000000`.
+- C5:
+  - RT-Thread requires CSR access, `ecall`, `mret`, simple exception handling, CTE, and careful debugging, but RT-Thread is not the immediate Phase 4 implementation target until UART/CLINT are stable.
+- `specs/core.md`:
+  - `ebreak` is a real breakpoint exception architecturally;
+  - no interrupts are supported, and built-in CLINT only provides `mtime`/`mtimeh` ticking once per core cycle.
 
-Tasks:
+Phase decisions and constraints:
 
-1. Complete/verify `riscv32e-npc` AM target support.
-2. Provide `make ... run` style one-command build-and-run flow for NPC.
-3. Implement `halt()` using `ebreak` and pass result code to the harness.
-4. Add simple UART output at `0x10000000` in the simulation environment first.
-5. Add CLINT/timer simulation compatible with later RTL CLINT behavior.
-6. Run and validate:
-   - `dummy`
-   - `hello`
-   - broader `cpu-tests`
-   - `am-tests` timer test
-7. Implement enough CTE/trap behavior to run `rt-thread-am` under M-mode-only assumptions.
-8. Keep unsupported PA OS/application features out of scope.
+- For this phase, only make **UART output** and a **temporary DiffTest-friendly timer** work first. Do not expand scope into optional devices, new custom workloads, preemptive timer interrupts, physical cycle-accurate CLINT, or full RT-Thread debugging until these basics are stable.
+- UART input is out of scope in Phase 4. No Phase 4 workload is expected to need UART RX.
+- `ebreak` simulation termination is a harness policy: after an `ebreak` instruction has retired, the simulator detects that retired event and stops/reports the result. Termination does not happen inside an AM trap handler.
+- NPC must still keep architectural `ebreak` exception state correct enough for later CTE/RT-Thread work, but Phase 4 should not invent a custom AM termination trap handler.
+- Use existing `am-kernels` workloads for CTE testing, especially `yield-os` and related tests. Do not create a new CTE workload unless existing workloads are unavailable or cannot isolate a confirmed bug.
+- NEMU may be modified to support devices. Prefer its existing device framework rather than ad hoc device paths, so NEMU remains useful as a reference and AM target for UART/timer/CTE tests.
+- Phase 4 timer decision: use a temporary simulation timer/CLINT model whose `mtime`/`mtimeh` advance deterministically by retired-instruction count, so current DiffTest remains usable. This is intentionally not the final physical CLINT behavior.
+- The real physical CLINT from `specs/core.md` increments once per core cycle. Implementing that requires device-aware DiffTest first: REF peripherals off, DUT MMIO input capture, and replay of captured MMIO read values to REF. Schedule that refactor before physical CLINT integration, not in early Phase 4.
+- Keep side effects out of unordered combinational DPI reads/writes. UART output and timer reads in NPC should be ordered through retired memory operations or another explicit harness protocol so Verilator evaluation order cannot duplicate, drop, or reorder device effects.
+- Treat `rt-thread-am` as a later debugging-heavy consumer of the AM/CTE/device foundation. Expect issues in NPC RTL, NEMU device/reference behavior, AM CTE/trap assembly, klib, linker/startup files, and RT-Thread AM build glue, but do not start broad RT-Thread debugging before UART and the temporary timer are working.
+- Avoid optional PA devices and applications. No keyboard, VGA, audio, PS/2, Nanos-lite, Navy, VME, user mode, or interrupts unless the user explicitly revises the scope.
 
-Exit criteria:
+Sessions:
 
-- `hello` prints through UART.
-- timer test works.
-- `rt-thread-am` reaches its expected prompt or documented milestone.
+1. **P4-S1: AM/NEMU/NPC device audit and baselines**
+   - Inspect current `riscv32e-npc` AM files, NPC MMIO/memory path, NEMU device configuration/framework, linker scripts, startup/trap code, and relevant `am-kernels` test entry points.
+   - Re-run the known-good Phase 3 checks: NPC regression and full cpu-tests with DiffTest, using the commands in `notes/next.md`.
+   - Identify the current UART and CLINT/timer gaps in both NPC and NEMU: missing AM `putch()`, IOE stubs, device mapping, build config, and run commands.
+   - Record the exact first failing commands for `hello`, an AM timer test, and a NEMU-device smoke attempt.
+   - Exit when the UART/CLINT work queue is grounded in current failures, not assumptions.
 
-## Phase 5: System Bus and AXI4 Integration
+2. **P4-S2: NPC ordered UART MMIO and AM `putch()`**
+   - Add NPC simulation UART output at `0x10000000` with byte/word write-mask handling and deterministic ordering.
+   - Update `abstract-machine/am/src/riscv/npc/trm.c` `putch()` to write to the UART MMIO address.
+   - Keep normal output plain enough for workload logs, but make the harness still emit final `NPC_RESULT` status lines.
+   - Run `am-kernels/kernels/hello` or the smallest available hello-style AM workload with `ARCH=riscv32e-npc`.
+   - Re-run the Phase 3 cpu-tests smoke subset to ensure UART changes did not perturb normal memory behavior.
+   - Exit when `hello` visibly prints through NPC UART and terminates by retired-`ebreak` detection with a good result.
 
-Goal: replace ideal DPI memory assumptions with bus-oriented memory/device access matching the top-level spec.
+3. **P4-S3: Temporary retired-instruction timer and AM IOE timer**
+   - Implement the Phase 4 simulation timer model needed now: expose `mtime`/`mtimeh` through the CLINT MMIO addresses used by AM, but advance the value deterministically by retired-instruction count rather than by physical core cycles.
+   - Make the temporary timer usable with current DiffTest. If NEMU REF is involved, keep its timer behavior aligned with the same deterministic retired-instruction notion, or keep timer MMIO out of compared REF device side effects.
+   - Ignore `mtimecmp`, `mtimecmph`, and `msip` writes/reads as specified; do not add interrupt behavior.
+   - Implement `ioe_init()`, UART abstract register support if needed, and AM timer reads for `riscv32e-npc`; convert the deterministic counter to time using the 100 MHz assumption for Phase 4 workloads.
+   - Run existing `am-tests` timer/RTC tests that can complete without interrupts; if a test is interactive or indefinite, use an existing bounded variant or document the limitation.
+   - Exit when AM can read a monotonically increasing uptime/RTC value on NPC, a timer test passes reproducibly, and the temporary-not-physical timer limitation is recorded.
+
+4. **P4-S4: NEMU device support for UART and temporary timer**
+   - Enable or repair NEMU device support using NEMU's existing device framework, not a parallel ad hoc implementation.
+   - Add or configure UART output and deterministic timer behavior compatible with the AM tests used for NPC where practical.
+   - Keep macOS SDL/device caveats isolated: UART/timer should not require optional graphical SDL devices.
+   - Run the same hello/timer-style AM workloads on `riscv32-nemu` or the relevant NEMU AM target and compare behavior against NPC at the workload-observable level.
+   - Exit when NEMU can serve as a device-capable reference for UART/timer AM workloads, or when a narrow device-framework blocker is documented.
+
+5. **P4-S5: Klib completion pass for essential workloads**
+   - Audit remaining klib gaps hit by `hello`, timer tests, `yield-os`, and nearby AM workloads.
+   - Complete missing klib functions by copying/adapting from Sonnet libc where suitable, while keeping code style compatible with `abstract-machine/klib`.
+   - Validate with existing AM tests rather than inventing a new klib workload.
+   - Exit when essential AM workloads no longer fail because of missing libc/klib routines.
+
+6. **P4-S6: CTE validation with existing `am-kernels` workloads**
+   - Audit existing Phase 3 trap/CSR behavior against AM CTE needs: `ecall`, `ebreak`, `mret`, `mtvec`, `mepc`, `mcause`, `mstatus`, and register save/restore expectations.
+   - Implement or repair the `riscv32e-npc` CTE assembly/C glue only as needed by existing AM workloads: context structure, trap vector installation, trap frame save/restore, `yield()`, event classification, handler call/return, and `kcontext()`.
+   - Use existing `am-kernels` CTE workloads such as `yield-os` for validation; do not create a new custom CTE test.
+   - Use DiffTest and bounded commit/trace dumps for mismatches around trap entry/return.
+   - Exit when the selected existing CTE workload passes or reaches a narrow documented blocker.
+
+7. **P4-S7: Workload regression and Phase 4 closeout**
+   - Re-run the Phase 4 standard set:
+     - NPC directed regression;
+     - full or representative cpu-tests with DiffTest;
+     - `hello` with NPC UART output;
+     - AM timer test on NPC CLINT;
+     - matching UART/timer smoke tests on NEMU devices where available;
+     - existing CTE workload such as `yield-os` if CTE work was reached.
+   - Update `npc/README.md` and relevant notes with current run commands only if commands or user-facing flags changed.
+   - Update `notes/next.md` with pass/fail table, exact commands, known caveats, and the next entry point.
+   - Keep generated logs/images out of commits unless they are intentionally part of the project record.
+   - Exit when a new session can reproduce the Phase 4 UART/CLINT state from notes alone.
+
+Phase 4 exit criteria:
+
+- NPC UART output at `0x10000000` is implemented with deterministic side effects, and `hello` prints visibly; UART input remains intentionally unsupported.
+- NPC AM IOE timer support works using the temporary retired-instruction-based `mtime`/`mtimeh` source and the 100 MHz platform assumption; no timer interrupt behavior is introduced.
+- NEMU has UART/temporary-timer support through its existing device framework or a narrow documented blocker.
+- `ebreak`-based simulation termination is documented as retired-instruction detection in the harness, not AM trap-handler termination.
+- Essential klib gaps found by the selected workloads are completed, using Sonnet libc as an allowed source when useful.
+- Existing AM CTE workload validation, such as `yield-os`, is planned for when UART/temporary timer are stable; if reached in this phase, it has current pass/fail status.
+- The temporary timer workaround and the need for later MMIO replay DiffTest before physical CLINT are recorded.
+- Phase 3 cpu-tests and directed NPC regressions still pass after AM/runtime/device changes.
+
+## Phase 5: System Bus, AXI4 Integration, and Device-Aware DiffTest
+
+Goal: replace ideal DPI memory assumptions with bus-oriented memory/device access matching the top-level spec, and refactor DiffTest so real MMIO devices can be tested without forcing REF and DUT peripheral timing to match.
 
 Relevant lecture guidance:
 
@@ -354,22 +432,30 @@ Tasks:
 1. Refactor IFU/LSU around valid/ready-style request/response interfaces if not already done.
 2. Add a simple internal bus abstraction that can evolve from simulation memory to AXI master.
 3. Implement aligned little-endian memory accesses; raise misaligned exceptions on unaligned accesses.
-4. Implement AXI master channels with 32-bit data width and required response handling.
-5. Hardwire reserved AXI slave outputs to zero and ignore reserved inputs.
-6. Map built-in CLINT internally at configurable range, default `0x02000000..0x0200ffff`.
-7. Route normal memory/device transactions through AXI master, while CLINT is handled as specified.
-8. Treat AXI `SLVERR`/`DECERR` as access faults.
-9. Add tests with deterministic and delayed memory responses to validate handshakes.
+4. Extend retired instruction / CommitEvent metadata to describe MMIO accesses: address, size, write data, write mask, read value, exception/access-fault status, and whether the access is normal memory or MMIO.
+5. Refactor DiffTest for peripherals before implementing physical CLINT:
+   - run REF with peripherals disabled or side effects suppressed;
+   - capture all DUT MMIO input values, especially MMIO read return values;
+   - replay captured MMIO read values into REF at the matching retired instruction;
+   - validate or suppress MMIO write side effects so UART output is not duplicated;
+   - continue comparing PC/GPR/CSR and exception behavior at retirement.
+6. Implement AXI master channels with 32-bit data width and required response handling.
+7. Hardwire reserved AXI slave outputs to zero and ignore reserved inputs.
+8. Keep the temporary retired-instruction timer from Phase 4 until device-aware DiffTest replay is working; do not replace it with physical CLINT earlier.
+9. Treat AXI `SLVERR`/`DECERR` as access faults.
+10. Add tests with deterministic and delayed memory responses to validate handshakes.
 
 Exit criteria:
 
 - Core can run previous tests through bus/AXI-facing memory model.
+- Device-aware DiffTest can replay DUT MMIO reads into REF with REF peripherals disabled/suppressed.
+- UART MMIO writes do not produce duplicate REF/DUT host output during DiffTest.
 - Misalignment and bus error exceptions are tested.
 - Top-level ports match `specs/core.md`.
 
-## Phase 6: Built-in CLINT, UART Path, and RT-Thread Stability
+## Phase 6: Physical Built-in CLINT, UART Path, and RT-Thread Stability
 
-Goal: solidify required runtime devices and OS-level workload behavior.
+Goal: replace the Phase 4 temporary timer with the spec-required physical built-in CLINT after device-aware DiffTest replay exists, then solidify required runtime-device and OS-level workload behavior.
 
 Relevant lecture guidance:
 
@@ -377,19 +463,24 @@ Relevant lecture guidance:
 - C5 RT-Thread.
 - B1 AXI CLINT notes, adapted to built-in CLINT requirement.
 
+Prerequisite:
+
+- Phase 5 device-aware DiffTest replay is working. Do not implement the physical cycle-based CLINT before this, because `mtime` reads are MMIO inputs that otherwise make REF/DUT comparison depend on mismatched peripheral timing.
+
 Tasks:
 
-1. Implement CLINT `mtime`/`mtimeh` incrementing once per core cycle.
+1. Replace the temporary retired-instruction timer with physical CLINT `mtime`/`mtimeh` incrementing once per core cycle.
 2. Ignore writes/reads to `mtimecmp`, `mtimecmph`, `msip` as specified: no effect, no error, read undefined.
 3. Update AM timer code if needed to read `mtime`/`mtimeh` robustly as 64-bit time.
 4. Keep interrupt behavior disabled; do not generate timer interrupts.
-5. Keep UART support in simulation/SoC path sufficient for `hello` and RT-Thread console output.
-6. Re-run `hello`, timer test, and `rt-thread-am` after bus/CLINT integration.
+5. Keep UART output support in simulation/SoC path sufficient for `hello` and RT-Thread console output; UART input remains deferred until a workload requires it.
+6. Re-run `hello`, timer test, CTE workloads such as `yield-os`, and `rt-thread-am` after bus/physical CLINT integration.
 
 Exit criteria:
 
-- CLINT behavior matches `specs/core.md`.
-- Essential UART/timer workloads still pass.
+- CLINT behavior matches `specs/core.md` and increments by core cycle.
+- Device-aware DiffTest remains usable with physical CLINT MMIO reads replayed from DUT to REF.
+- Essential UART/timer/CTE workloads still pass.
 
 ## Phase 7: Instruction Cache and `fence.i`
 
