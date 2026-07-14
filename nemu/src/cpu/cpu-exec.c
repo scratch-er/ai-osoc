@@ -18,28 +18,53 @@
 #include <cpu/difftest.h>
 #include <locale.h>
 
-/* The assembly code of instructions executed is only output to the screen
- * when the number of instructions executed is less than this value.
- * This is useful when you use the `si' command.
- * You can modify this value as you want.
- */
-#define MAX_INST_TO_PRINT 10
-
 CPU_state cpu = {};
 uint64_t g_nr_guest_inst = 0;
 static uint64_t g_timer = 0; // unit: us
-static bool g_print_step = false;
 
 void device_update();
 
-static void trace_and_difftest(Decode *_this, vaddr_t dnpc) {
-#ifdef CONFIG_IQUEUE
-  trace_inst_record(_this->logbuf);
-#endif
-#ifdef CONFIG_ITRACE_COND
-  if (ITRACE_COND) { log_write("%s\n", _this->logbuf); }
-#endif
-  if (g_print_step) { IFDEF(CONFIG_ITRACE, puts(_this->logbuf)); }
+static CommitEvent make_commit_event(Decode *s, vaddr_t dnpc) {
+  CommitEvent ev;
+  memset(&ev, 0, sizeof(ev));
+  ev.retire = g_nr_guest_inst;
+  ev.cycle = g_nr_guest_inst;
+  ev.pc = s->pc;
+  ev.inst = s->isa.inst;
+  ev.next_pc = dnpc;
+  uint32_t opcode = ev.inst & 0x7f;
+  uint32_t rd = (ev.inst >> 7) & 0x1f;
+  bool has_wb = false;
+  switch (opcode) {
+    case 0x37: // lui
+    case 0x17: // auipc
+    case 0x6f: // jal
+    case 0x67: // jalr
+    case 0x03: // loads
+    case 0x13: // OP-IMM
+    case 0x33: // OP
+    case 0x73: // CSR/system, refined below
+      has_wb = rd != 0;
+      break;
+    default:
+      break;
+  }
+  if (opcode == 0x73 && ((ev.inst >> 12) & 0x7) == 0) {
+    has_wb = false; // ecall/ebreak/mret-like system instructions do not write GPRs
+  }
+  ev.has_wb = has_wb;
+  ev.rd = rd;
+  if (has_wb && rd < ARRLEN(cpu.gpr)) {
+    ev.rd_value = cpu.gpr[rd];
+  }
+  if (nemu_state.state == NEMU_ABORT) {
+    ev.exception = 1;
+    ev.cause = nemu_state.state;
+  }
+  return ev;
+}
+
+static void difftest_after_commit(Decode *_this, vaddr_t dnpc) {
   IFDEF(CONFIG_DIFFTEST, difftest_step(_this->pc, dnpc));
 }
 
@@ -48,30 +73,6 @@ static void exec_once(Decode *s, vaddr_t pc) {
   s->snpc = pc;
   isa_exec_once(s);
   cpu.pc = s->dnpc;
-#if defined(CONFIG_ITRACE) || defined(CONFIG_IQUEUE)
-  char *p = s->logbuf;
-  p += snprintf(p, sizeof(s->logbuf), FMT_WORD ":", s->pc);
-  int ilen = s->snpc - s->pc;
-  int i;
-  uint8_t *inst = (uint8_t *)&s->isa.inst;
-#ifdef CONFIG_ISA_x86
-  for (i = 0; i < ilen; i ++) {
-#else
-  for (i = ilen - 1; i >= 0; i --) {
-#endif
-    p += snprintf(p, 4, " %02x", inst[i]);
-  }
-  int ilen_max = MUXDEF(CONFIG_ISA_x86, 8, 4);
-  int space_len = ilen_max - ilen;
-  if (space_len < 0) space_len = 0;
-  space_len = space_len * 3 + 1;
-  memset(p, ' ', space_len);
-  p += space_len;
-
-  void disassemble(char *str, int size, uint64_t pc, uint8_t *code, int nbyte);
-  disassemble(p, s->logbuf + sizeof(s->logbuf) - p,
-      MUXDEF(CONFIG_ISA_x86, s->snpc, s->pc), (uint8_t *)&s->isa.inst, ilen);
-#endif
 }
 
 static void execute(uint64_t n) {
@@ -85,7 +86,9 @@ static void execute(uint64_t n) {
     }
     exec_once(&s, cpu.pc);
     g_nr_guest_inst ++;
-    trace_and_difftest(&s, cpu.pc);
+    CommitEvent ev = make_commit_event(&s, cpu.pc);
+    commit_event_record(&ev);
+    difftest_after_commit(&s, cpu.pc);
     if (nemu_state.state != NEMU_RUNNING) break;
     IFDEF(CONFIG_DEVICE, device_update());
   }
@@ -119,13 +122,12 @@ static void report_result() {
 
 void assert_fail_msg() {
   isa_reg_display();
-  IFDEF(CONFIG_IQUEUE, trace_inst_dump());
+  commit_event_dump_last(0);
   statistic();
 }
 
 /* Simulate how the CPU works. */
 void cpu_exec(uint64_t n) {
-  g_print_step = (n < MAX_INST_TO_PRINT);
   switch (nemu_state.state) {
     case NEMU_END: case NEMU_ABORT: case NEMU_QUIT:
       printf("Program execution has ended. To restart the program, exit NEMU and run again.\n");
@@ -150,14 +152,14 @@ void cpu_exec(uint64_t n) {
             ANSI_FMT("HIT BAD TRAP", ANSI_FG_RED))),
           nemu_state.halt_pc);
       if (nemu_state.state == NEMU_ABORT || nemu_state.halt_ret != 0) {
-        IFDEF(CONFIG_IQUEUE, trace_inst_dump());
+        commit_event_dump_last(0);
       }
       statistic();
       report_result();
       break;
     case NEMU_LIMIT:
       Log("nemu: instruction limit reached at pc = " FMT_WORD, nemu_state.halt_pc);
-      IFDEF(CONFIG_IQUEUE, trace_inst_dump());
+      commit_event_dump_last(0);
       statistic();
       report_result();
       break;

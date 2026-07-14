@@ -13,7 +13,16 @@ module NPC #(
   output [31:0] debug_a0,
   output [1:0]  debug_trap_status,
   output [31:0] debug_inst,
-  output [511:0] debug_regs_flat
+  output [511:0] debug_regs_flat,
+  output        commit_valid,
+  output [31:0] commit_pc,
+  output [31:0] commit_inst,
+  output [31:0] commit_next_pc,
+  output        commit_wen,
+  output [4:0]  commit_rd,
+  output [31:0] commit_wdata,
+  output        commit_exception,
+  output [31:0] commit_cause
 );
 
   wire unused_interrupt = io_interrupt;
@@ -30,7 +39,16 @@ module NPC #(
     .debug_a0(debug_a0),
     .debug_trap_status(debug_trap_status),
     .debug_inst(debug_inst),
-    .debug_regs_flat(debug_regs_flat)
+    .debug_regs_flat(debug_regs_flat),
+    .commit_valid(commit_valid),
+    .commit_pc(commit_pc),
+    .commit_inst(commit_inst),
+    .commit_next_pc(commit_next_pc),
+    .commit_wen(commit_wen),
+    .commit_rd(commit_rd),
+    .commit_wdata(commit_wdata),
+    .commit_exception(commit_exception),
+    .commit_cause(commit_cause)
   );
 
 endmodule

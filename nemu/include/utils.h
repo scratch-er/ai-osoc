@@ -17,6 +17,7 @@
 #define __UTILS_H__
 
 #include <common.h>
+#include <debug/commit_event.h>
 
 // ----------- state -----------
 
@@ -33,9 +34,10 @@ extern uint64_t nemu_inst_limit;
 
 // ----------- trace -----------
 
-IFDEF(CONFIG_IQUEUE, void trace_inst_record(const char *logbuf));
-IFDEF(CONFIG_IQUEUE, void trace_inst_dump(void));
-IFDEF(CONFIG_MTRACE, bool mtrace_enabled(paddr_t addr));
+void commit_event_record(const CommitEvent *ev);
+void commit_event_dump_last(size_t n);
+bool commit_event_get_last(CommitEvent *ev);
+size_t commit_event_copy_last(CommitEvent *buf, size_t max_n);
 
 // ----------- timer -----------
 
@@ -63,31 +65,9 @@ uint64_t get_time();
 
 #define ANSI_FMT(str, fmt) fmt str ANSI_NONE
 
-#define log_write(...) IFDEF(CONFIG_TARGET_NATIVE_ELF, \
-  do { \
-    extern FILE* log_fp; \
-    extern bool log_enable(); \
-    if (log_enable() && log_fp != NULL) { \
-      fprintf(log_fp, __VA_ARGS__); \
-      fflush(log_fp); \
-    } \
-  } while (0) \
-)
-
-#define log_write_force(...) IFDEF(CONFIG_TARGET_NATIVE_ELF, \
-  do { \
-    extern FILE* log_fp; \
-    if (log_fp != NULL) { \
-      fprintf(log_fp, __VA_ARGS__); \
-      fflush(log_fp); \
-    } \
-  } while (0) \
-)
-
 #define _Log(...) \
   do { \
     printf(__VA_ARGS__); \
-    log_write(__VA_ARGS__); \
   } while (0)
 
 

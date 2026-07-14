@@ -41,20 +41,7 @@ typedef union {
 } SIB;
 
 static word_t x86_inst_fetch(Decode *s, int len) {
-#if defined(CONFIG_ITRACE) || defined(CONFIG_IQUEUE)
-  uint8_t *p = &s->isa.inst[s->snpc - s->pc];
-  word_t ret = inst_fetch(&s->snpc, len);
-  word_t ret_save = ret;
-  int i;
-  assert(s->snpc - s->pc < sizeof(s->isa.inst));
-  for (i = 0; i < len; i ++) {
-    p[i] = ret & 0xff;
-    ret >>= 8;
-  }
-  return ret_save;
-#else
   return inst_fetch(&s->snpc, len);
-#endif
 }
 
 word_t reg_read(int idx, int width) {

@@ -12,7 +12,16 @@ module Core #(
   output [31:0] debug_a0,
   output [1:0]  debug_trap_status,
   output [31:0] debug_inst,
-  output [511:0] debug_regs_flat
+  output [511:0] debug_regs_flat,
+  output        commit_valid,
+  output [31:0] commit_pc,
+  output [31:0] commit_inst,
+  output [31:0] commit_next_pc,
+  output        commit_wen,
+  output [4:0]  commit_rd,
+  output [31:0] commit_wdata,
+  output        commit_exception,
+  output [31:0] commit_cause
 );
 
   wire [31:0] reset_vector = (reset_pc == 32'd0) ? RESET_PC : reset_pc;
@@ -69,6 +78,15 @@ module Core #(
   assign debug_halted = halted;
   assign debug_trap_status = trap_status;
   assign debug_inst = inst;
+  assign commit_valid = !reset && !halted;
+  assign commit_pc = pc;
+  assign commit_inst = inst;
+  assign commit_next_pc = legal_inst ? next_pc : pc;
+  assign commit_wen = wb_wen && rd != 5'd0;
+  assign commit_rd = rd;
+  assign commit_wdata = final_wb_data;
+  assign commit_exception = !legal_inst;
+  assign commit_cause = legal_inst ? 32'd0 : 32'd2;
 
   Ifu u_ifu (
     .pc(fetch_pc),

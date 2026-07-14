@@ -21,6 +21,10 @@ bool Memory::contains(uint32_t addr, uint32_t len) const {
 }
 
 bool Memory::load_image(const std::string &path) {
+  return load_image_at(path, base_addr_);
+}
+
+bool Memory::load_image_at(const std::string &path, uint32_t addr) {
   if (path.empty()) {
     return true;
   }
@@ -35,13 +39,15 @@ bool Memory::load_image(const std::string &path) {
   long image_size = std::ftell(fp);
   std::fseek(fp, 0, SEEK_SET);
 
-  if (image_size < 0 || static_cast<uint32_t>(image_size) > data_size_) {
-    std::fprintf(stderr, "image too large: %ld bytes, memory size %u bytes\n", image_size, data_size_);
+  if (image_size < 0 || !contains(addr, static_cast<uint32_t>(image_size))) {
+    std::fprintf(stderr, "image out of bounds: addr=0x%08x size=%ld memory=[0x%08x,+%u)\n",
+                 addr, image_size, base_addr_, data_size_);
     std::fclose(fp);
     return false;
   }
 
-  size_t nread = std::fread(data_, 1, static_cast<size_t>(image_size), fp);
+  uint32_t off = addr - base_addr_;
+  size_t nread = std::fread(data_ + off, 1, static_cast<size_t>(image_size), fp);
   std::fclose(fp);
 
   if (nread != static_cast<size_t>(image_size)) {
@@ -49,7 +55,7 @@ bool Memory::load_image(const std::string &path) {
     return false;
   }
 
-  std::printf("NPC_IMAGE path=%s base=0x%08x size=%ld\n", path.c_str(), base_addr_, image_size);
+  std::printf("NPC_IMAGE path=%s base=0x%08x size=%ld\n", path.c_str(), addr, image_size);
   return true;
 }
 

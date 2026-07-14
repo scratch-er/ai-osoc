@@ -54,14 +54,10 @@ void init_mem() {
 
 word_t paddr_read(paddr_t addr, int len) {
   if (likely(in_pmem(addr))) {
-    word_t data = pmem_read(addr, len);
-    IFDEF(CONFIG_MTRACE, if (mtrace_enabled(addr)) log_write_force("MTRACE r pc=" FMT_WORD " addr=" FMT_PADDR " len=%d data=" FMT_WORD "\n", cpu.pc, addr, len, data));
-    return data;
+    return pmem_read(addr, len);
   }
 #ifdef CONFIG_DEVICE
-  word_t data = mmio_read(addr, len);
-  IFDEF(CONFIG_MTRACE, if (mtrace_enabled(addr)) log_write_force("MTRACE r pc=" FMT_WORD " addr=" FMT_PADDR " len=%d data=" FMT_WORD "\n", cpu.pc, addr, len, data));
-  return data;
+  return mmio_read(addr, len);
 #else
   if (addr == SERIAL_MMIO && len == 1) { return 0; }
 #endif
@@ -70,7 +66,6 @@ word_t paddr_read(paddr_t addr, int len) {
 }
 
 void paddr_write(paddr_t addr, int len, word_t data) {
-  IFDEF(CONFIG_MTRACE, if (mtrace_enabled(addr)) log_write_force("MTRACE w pc=" FMT_WORD " addr=" FMT_PADDR " len=%d data=" FMT_WORD "\n", cpu.pc, addr, len, data));
   if (likely(in_pmem(addr))) { pmem_write(addr, len, data); return; }
 #ifdef CONFIG_DEVICE
   mmio_write(addr, len, data);

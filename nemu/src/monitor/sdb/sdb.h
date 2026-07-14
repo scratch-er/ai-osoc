@@ -18,6 +18,8 @@
 
 #include <common.h>
 
-word_t expr(char *e, bool *success);
+void sdb_set_batch_mode(void);
+void sdb_set_script(const char *script);
+void sdb_set_script_file(const char *path);
 
 #endif

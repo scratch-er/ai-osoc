@@ -3,13 +3,19 @@
 #include "memory.h"
 #include "difftest.h"
 
+#include <debug/commit_event.h>
+
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <array>
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
+#include <vector>
 
 #if VM_TRACE
 #include "verilated_vcd_c.h"
@@ -24,17 +30,11 @@ constexpr uint32_t NPC_STATUS_GOOD = 1;
 constexpr uint32_t NPC_STATUS_BAD = 2;
 constexpr uint32_t NPC_STATUS_LIMIT = 3;
 
-constexpr size_t TRACE_DEPTH = 8;
-
-struct TraceEntry {
-  uint64_t cycle = 0;
-  uint32_t pc = 0;
-  uint32_t inst = 0;
-};
-
 struct Args {
   std::string image;
   std::string difftest_ref;
+  std::string exec_script;
+  std::string script_file;
   uint64_t max_cycles = 100;
   uint32_t reset_pc = 0x20000000u;
   bool wave = false;
@@ -43,11 +43,13 @@ struct Args {
   bool dump_trace = false;
   bool dump_regs = false;
   bool mem_trace = false;
+  size_t ring_size = 64;
 };
 
-void usage(const char *prog) {
-  std::printf("Usage: %s [--image FILE] [--max-cycles N] [--reset-pc HEX] [--expect-x1 HEX] [--difftest-ref SO] [--wave] [--dump-trace] [--dump-regs] [--mem-trace]\n", prog);
-}
+struct RunResult {
+  std::string status = "stop";
+  std::string reason = "none";
+};
 
 bool parse_u64(const char *s, uint64_t *value) {
   char *end = nullptr;
@@ -82,16 +84,178 @@ void dump_regs(const VNPC &top) {
   }
 }
 
-void dump_trace(const std::array<TraceEntry, TRACE_DEPTH> &trace, size_t trace_count) {
-  size_t count = trace_count < TRACE_DEPTH ? trace_count : TRACE_DEPTH;
-  size_t start = trace_count >= TRACE_DEPTH ? trace_count % TRACE_DEPTH : 0;
-  for (size_t i = 0; i < count; i++) {
-    const TraceEntry &entry = trace[(start + i) % TRACE_DEPTH];
-    std::printf("NPC_TRACE cycle=%llu pc=0x%08x inst=0x%08x\n",
-                static_cast<unsigned long long>(entry.cycle),
-                entry.pc,
-                entry.inst);
+class CommitRing {
+public:
+  explicit CommitRing(size_t size) : entries_(std::max<size_t>(size, 1)) {}
+
+  void push(const CommitEvent &ev) {
+    entries_[next_] = ev;
+    next_ = (next_ + 1) % entries_.size();
+    if (count_ < entries_.size()) count_++;
   }
+
+  std::vector<CommitEvent> last(size_t n) const {
+    if (n == 0 || n > count_) n = count_;
+    std::vector<CommitEvent> out;
+    out.reserve(n);
+    size_t first = (next_ + entries_.size() - n) % entries_.size();
+    for (size_t i = 0; i < n; i++) {
+      out.push_back(entries_[(first + i) % entries_.size()]);
+    }
+    return out;
+  }
+
+  void dump(size_t n) const {
+    auto events = last(n);
+    std::printf("NPC_LAST_BEGIN count=%zu\n", events.size());
+    for (const auto &ev : events) {
+      char buf[160];
+      commit_event_format(&ev, buf, sizeof(buf));
+      std::printf("NPC_LAST %s\n", buf);
+    }
+    std::printf("NPC_LAST_END\n");
+  }
+
+private:
+  std::vector<CommitEvent> entries_;
+  size_t next_ = 0;
+  size_t count_ = 0;
+};
+
+class Simulator {
+public:
+  Simulator(VNPC &top, Memory &memory, const Args &args, Difftest &difftest)
+      : top_(top), memory_(memory), args_(args), difftest_(difftest), ring_(args.ring_size) {}
+
+  void reset() {
+    cycles_ = 0;
+    retire_ = 0;
+    top_.reset = 1;
+    top_.io_interrupt = 0;
+    top_.io_reset_pc = args_.reset_pc;
+    eval_cycle();
+    eval_cycle();
+    top_.reset = 0;
+    top_.eval();
+  }
+
+  bool load(const std::string &path, uint32_t addr) {
+    return memory_.load_image_at(path, addr);
+  }
+
+  RunResult step(uint64_t n) {
+    RunResult result;
+    for (uint64_t i = 0; i < n; i++) {
+      if (Verilated::gotFinish()) return {"bad", "host_finish"};
+      if (top_.debug_halted) return finish_reason(false);
+      if (cycles_ >= args_.max_cycles) return {"limit", "cycle_limit"};
+      if (!top_.commit_valid) return {"bad", "no_commit"};
+
+      CommitEvent ev = make_event();
+      eval_cycle();
+      cycles_++;
+      ring_.push(ev);
+      retire_++;
+
+      if (log_level_ >= 1 || trace_on_) {
+        char buf[160];
+        commit_event_format(&ev, buf, sizeof(buf));
+        std::printf("NPC_TRACE %s\n", buf);
+      }
+
+      if (difftest_.enabled()) {
+        auto regs = debug_regs(top_);
+        if (!difftest_.step(ev, regs.data(), top_.debug_pc)) {
+          difftest_.dump_last_ref(8);
+          return {"bad", "difftest_mismatch"};
+        }
+      }
+
+      if (ev.exception) return {"bad", "illegal_inst"};
+      if (top_.debug_halted) return finish_reason(false);
+    }
+    if (cycles_ >= args_.max_cycles) {
+      result.status = "limit";
+      result.reason = "cycle_limit";
+    } else {
+      result.status = "stop";
+      result.reason = "step_done";
+    }
+    return result;
+  }
+
+  RunResult run(uint64_t n) {
+    return step(n);
+  }
+
+  RunResult run_to(uint32_t target_pc) {
+    while (true) {
+      if (top_.debug_pc == target_pc) return {"stop", "target_pc"};
+      RunResult r = step(1);
+      if (r.reason != "step_done") return r;
+    }
+  }
+
+  RunResult run_until_reg(int idx, uint32_t value) {
+    while (true) {
+      if (idx >= 0 && idx < 16 && debug_reg(top_, idx) == value) return {"stop", "target_reg"};
+      RunResult r = step(1);
+      if (r.reason != "step_done") return r;
+    }
+  }
+
+  void dump_last(size_t n) const { ring_.dump(n); }
+  void set_log(int level) { log_level_ = level; }
+  void set_trace(bool on) { trace_on_ = on; }
+  uint64_t cycles() const { return cycles_; }
+  uint64_t retired() const { return retire_; }
+
+private:
+  CommitEvent make_event() const {
+    CommitEvent ev{};
+    ev.retire = retire_ + 1;
+    ev.cycle = cycles_;
+    ev.pc = top_.commit_pc;
+    ev.inst = top_.commit_inst;
+    ev.next_pc = top_.commit_next_pc;
+    ev.has_wb = top_.commit_wen;
+    ev.rd = top_.commit_rd;
+    ev.rd_value = top_.commit_wdata;
+    ev.exception = top_.commit_exception;
+    ev.cause = top_.commit_cause;
+    return ev;
+  }
+
+  RunResult finish_reason(bool limit) const {
+    if (limit) return {"limit", "cycle_limit"};
+    if (top_.debug_trap_status == NPC_STATUS_GOOD) return {"good", "good_trap"};
+    if (top_.debug_trap_status == NPC_STATUS_BAD) return {"bad", "bad_trap"};
+    return {"stop", "halted"};
+  }
+
+  void eval_cycle() {
+    top_.clock = 0;
+    top_.eval();
+    sim_time_++;
+    top_.clock = 1;
+    top_.eval();
+    sim_time_++;
+  }
+
+  VNPC &top_;
+  Memory &memory_;
+  const Args &args_;
+  Difftest &difftest_;
+  CommitRing ring_;
+  uint64_t sim_time_ = 0;
+  uint64_t cycles_ = 0;
+  uint64_t retire_ = 0;
+  int log_level_ = 0;
+  bool trace_on_ = false;
+};
+
+void usage(const char *prog) {
+  std::printf("Usage: %s [--image FILE] [--max-cycles N] [--reset-pc HEX] [--expect-x1 HEX] [--difftest-ref SO] [--wave] [--dump-trace] [--dump-regs] [--mem-trace] [-e COMMANDS] [-f FILE]\n", prog);
 }
 
 bool parse_args(int argc, char **argv, Args *args) {
@@ -100,11 +264,19 @@ bool parse_args(int argc, char **argv, Args *args) {
       args->image = argv[++i];
     } else if (std::strcmp(argv[i], "--difftest-ref") == 0 && i + 1 < argc) {
       args->difftest_ref = argv[++i];
+    } else if ((std::strcmp(argv[i], "-e") == 0 || std::strcmp(argv[i], "--exec") == 0) && i + 1 < argc) {
+      args->exec_script = argv[++i];
+    } else if ((std::strcmp(argv[i], "-f") == 0 || std::strcmp(argv[i], "--script") == 0) && i + 1 < argc) {
+      args->script_file = argv[++i];
     } else if (std::strcmp(argv[i], "--max-cycles") == 0 && i + 1 < argc) {
       if (!parse_u64(argv[++i], &args->max_cycles)) {
         std::fprintf(stderr, "invalid --max-cycles\n");
         return false;
       }
+    } else if (std::strcmp(argv[i], "--ring-size") == 0 && i + 1 < argc) {
+      uint64_t value = 0;
+      if (!parse_u64(argv[++i], &value)) return false;
+      args->ring_size = static_cast<size_t>(value);
     } else if (std::strcmp(argv[i], "--reset-pc") == 0 && i + 1 < argc) {
       uint64_t value = 0;
       if (!parse_u64(argv[++i], &value)) {
@@ -140,6 +312,117 @@ bool parse_args(int argc, char **argv, Args *args) {
   return true;
 }
 
+std::vector<std::string> split_commands(const std::string &script) {
+  std::vector<std::string> commands;
+  std::string current;
+  for (char c : script) {
+    if (c == ';' || c == '\n') {
+      if (!current.empty()) commands.push_back(current);
+      current.clear();
+    } else {
+      current.push_back(c);
+    }
+  }
+  if (!current.empty()) commands.push_back(current);
+  return commands;
+}
+
+std::vector<std::string> tokens(const std::string &line) {
+  std::istringstream iss(line);
+  std::vector<std::string> out;
+  std::string tok;
+  while (iss >> tok) out.push_back(tok);
+  return out;
+}
+
+bool parse_u32_token(const std::string &s, uint32_t *value) {
+  uint64_t tmp = 0;
+  if (!parse_u64(s.c_str(), &tmp)) return false;
+  *value = static_cast<uint32_t>(tmp);
+  return true;
+}
+
+bool execute_command(const std::string &line, Simulator &sim, VNPC &top, Memory &memory, RunResult *last_result) {
+  auto t = tokens(line);
+  if (t.empty()) return true;
+  const std::string &cmd = t[0];
+  if (cmd == "exit" || cmd == "quit") return false;
+  if (cmd == "load" || cmd == "load_bin") {
+    if (t.size() < 2) {
+      std::printf("Usage: load <file> [addr]\n");
+      return true;
+    }
+    uint32_t addr = memory.base();
+    if (t.size() >= 3 && !parse_u32_token(t[2], &addr)) {
+      std::printf("invalid load address: %s\n", t[2].c_str());
+      return true;
+    }
+    sim.load(t[1], addr);
+  } else if (cmd == "reset") {
+    sim.reset();
+  } else if (cmd == "step") {
+    uint64_t n = t.size() >= 2 ? std::strtoull(t[1].c_str(), nullptr, 0) : 1;
+    *last_result = sim.step(n);
+  } else if (cmd == "run") {
+    if (t.size() >= 3 && t[1] == "to") {
+      uint32_t pc = 0;
+      if (parse_u32_token(t[2], &pc)) *last_result = sim.run_to(pc);
+    } else if (t.size() >= 5 && t[1] == "until" && t[2] == "reg") {
+      int idx = std::strtol(t[3].c_str(), nullptr, 0);
+      uint32_t value = 0;
+      if (parse_u32_token(t[4], &value)) *last_result = sim.run_until_reg(idx, value);
+    } else {
+      uint64_t n = t.size() >= 2 ? std::strtoull(t[1].c_str(), nullptr, 0) : UINT64_MAX;
+      *last_result = sim.run(n);
+    }
+  } else if (cmd == "print") {
+    if (t.size() >= 2 && t[1] == "pc") {
+      std::printf("pc = 0x%08x\n", top.debug_pc);
+    } else if (t.size() >= 2 && t[1] == "reg") {
+      if (t.size() == 2) dump_regs(top);
+      else {
+        int idx = std::strtol(t[2].c_str(), nullptr, 0);
+        if (idx >= 0 && idx < 16) std::printf("x%d = 0x%08x\n", idx, debug_reg(top, idx));
+      }
+    } else if (t.size() >= 4 && t[1] == "mem") {
+      uint32_t addr = 0;
+      uint32_t size = 0;
+      if (parse_u32_token(t[2], &addr) && parse_u32_token(t[3], &size)) {
+        for (uint32_t off = 0; off < size; off += 4) {
+          std::printf("MEM 0x%08x = 0x%08x\n", addr + off, memory.read32(addr + off));
+        }
+      }
+    }
+  } else if (cmd == "dump" && t.size() >= 2 && t[1] == "state") {
+    std::printf("NPC_STATE pc=0x%08x cycles=%llu retired=%llu halted=%u trap=%u\n",
+                top.debug_pc,
+                static_cast<unsigned long long>(sim.cycles()),
+                static_cast<unsigned long long>(sim.retired()),
+                top.debug_halted,
+                top.debug_trap_status);
+    dump_regs(top);
+  } else if (cmd == "last") {
+    size_t n = t.size() >= 2 ? static_cast<size_t>(std::strtoull(t[1].c_str(), nullptr, 0)) : 0;
+    sim.dump_last(n);
+  } else if (cmd == "log") {
+    int level = t.size() >= 2 ? std::strtol(t[1].c_str(), nullptr, 0) : 0;
+    sim.set_log(level);
+  } else if (cmd == "trace") {
+    bool on = t.size() >= 2 && t[1] == "on";
+    sim.set_trace(on);
+  } else {
+    std::printf("Unknown command '%s'\n", cmd.c_str());
+  }
+  return true;
+}
+
+std::string read_script_file(const std::string &path) {
+  std::ifstream in(path);
+  std::ostringstream ss;
+  ss << in.rdbuf();
+  return ss.str();
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -170,32 +453,10 @@ int main(int argc, char **argv) {
   }
 #endif
 
-  uint64_t sim_time = 0;
-  auto eval_cycle = [&]() {
-    top->clock = 0;
-    top->eval();
-#if VM_TRACE
-    if (args.wave && tfp) tfp->dump(sim_time);
-#endif
-    sim_time++;
-    top->clock = 1;
-    top->eval();
-#if VM_TRACE
-    if (args.wave && tfp) tfp->dump(sim_time);
-#endif
-    sim_time++;
-  };
-
-  top->reset = 1;
-  top->io_interrupt = 0;
-  top->io_reset_pc = args.reset_pc;
-  eval_cycle();
-  eval_cycle();
-  top->reset = 0;
-  top->eval();
-
   Difftest difftest;
-  bool difftest_pass = true;
+  Simulator sim(*top, memory, args, difftest);
+  sim.reset();
+
   if (!args.difftest_ref.empty()) {
     auto regs = debug_regs(*top);
     if (!difftest.init(args.difftest_ref, memory, args.reset_pc, regs.data(), top->debug_pc)) {
@@ -204,54 +465,46 @@ int main(int argc, char **argv) {
     }
   }
 
-  std::array<TraceEntry, TRACE_DEPTH> trace;
-  size_t trace_count = 0;
-  uint64_t cycles = 0;
-  while (!Verilated::gotFinish() && !top->debug_halted && cycles < args.max_cycles) {
-    trace[trace_count % TRACE_DEPTH] = TraceEntry{cycles, top->debug_pc, top->debug_inst};
-    trace_count++;
-    eval_cycle();
-    cycles++;
-    if (difftest.enabled() && !top->debug_halted) {
-      auto regs = debug_regs(*top);
-      if (!difftest.step(regs.data(), top->debug_pc)) {
-        difftest_pass = false;
-        break;
-      }
+  RunResult result;
+  bool scripted = !args.exec_script.empty() || !args.script_file.empty();
+  if (scripted) {
+    std::string script = !args.exec_script.empty() ? args.exec_script : read_script_file(args.script_file);
+    for (const auto &cmd : split_commands(script)) {
+      if (!execute_command(cmd, sim, *top, memory, &result)) break;
     }
+  } else {
+    result = sim.run(args.max_cycles);
   }
 
-  bool limit = !top->debug_halted && cycles >= args.max_cycles;
   bool check_pass = !args.check_x1 || top->debug_x1 == args.expect_x1;
-  uint32_t trap_status = limit ? NPC_STATUS_LIMIT : top->debug_trap_status;
-  bool trap_pass = trap_status == NPC_STATUS_GOOD;
-  bool run_pass = check_pass && trap_pass && difftest_pass;
-  const char *status = "bad";
-  if (limit && difftest_pass) {
-    status = "limit";
-  } else if (run_pass) {
-    status = "good";
-  }
   if (args.check_x1) {
     std::printf("NPC_CHECK x1=0x%08x expect=0x%08x %s\n",
                 top->debug_x1,
                 args.expect_x1,
                 check_pass ? "PASS" : "FAIL");
   }
-  std::printf("NPC_RESULT status=%s cycles=%llu pc=0x%08x halted=%u limit=%llu x1=0x%08x a0=0x%08x trap=%u\n",
-              status,
-              static_cast<unsigned long long>(cycles),
+  if (!check_pass && result.status == "good") {
+    result.status = "bad";
+    result.reason = "check_failed";
+  }
+  uint32_t trap_status = result.status == "limit" ? NPC_STATUS_LIMIT : top->debug_trap_status;
+  std::printf("NPC_RESULT status=%s reason=%s cycles=%llu insts=%llu pc=0x%08x halted=%u limit=%llu x1=0x%08x a0=0x%08x trap=%u\n",
+              result.status.c_str(),
+              result.reason.c_str(),
+              static_cast<unsigned long long>(sim.cycles()),
+              static_cast<unsigned long long>(sim.retired()),
               top->debug_pc,
               top->debug_halted,
               static_cast<unsigned long long>(args.max_cycles),
               top->debug_x1,
               top->debug_a0,
               trap_status);
-  bool dump_on_failure = !run_pass;
-  if (args.dump_trace || dump_on_failure) {
-    dump_trace(trace, trace_count);
+
+  bool run_pass = check_pass && result.status == "good";
+  if (args.dump_trace || !run_pass) {
+    sim.dump_last(0);
   }
-  if (args.dump_regs || dump_on_failure) {
+  if (args.dump_regs || !run_pass) {
     dump_regs(*top);
   }
 

@@ -17,6 +17,7 @@
 #include <cpu/cpu.h>
 #include <difftest-def.h>
 #include <memory/paddr.h>
+#include <utils.h>
 
 void cpu_exec(uint64_t n);
 
@@ -40,6 +41,16 @@ __EXPORT void difftest_regcpy(void *dut, bool direction) {
 
 __EXPORT void difftest_exec(uint64_t n) {
   cpu_exec(n);
+}
+
+__EXPORT void difftest_step_event(CommitEvent *ev) {
+  cpu_exec(1);
+  bool ok = commit_event_get_last(ev);
+  assert(ok);
+}
+
+__EXPORT size_t difftest_get_last_events(CommitEvent *buf, size_t max_n) {
+  return commit_event_copy_last(buf, max_n);
 }
 
 __EXPORT void difftest_raise_intr(word_t NO) {

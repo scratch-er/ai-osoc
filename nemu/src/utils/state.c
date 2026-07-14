@@ -18,35 +18,46 @@
 NEMUState nemu_state = { .state = NEMU_STOP };
 uint64_t nemu_inst_limit = 0;
 
-#ifdef CONFIG_IQUEUE
-static char iqueue[CONFIG_IQUEUE_SIZE][128];
-static int iqueue_next = 0;
-static int iqueue_count = 0;
+#define COMMIT_EVENT_RING_SIZE 64
+static CommitEvent commit_ring[COMMIT_EVENT_RING_SIZE];
+static size_t commit_ring_next = 0;
+static size_t commit_ring_count = 0;
 
-void trace_inst_record(const char *logbuf) {
-  if (CONFIG_IQUEUE_SIZE <= 0) return;
-  snprintf(iqueue[iqueue_next], sizeof(iqueue[iqueue_next]), "%s", logbuf);
-  iqueue_next = (iqueue_next + 1) % CONFIG_IQUEUE_SIZE;
-  if (iqueue_count < CONFIG_IQUEUE_SIZE) iqueue_count ++;
+void commit_event_record(const CommitEvent *ev) {
+  commit_ring[commit_ring_next] = *ev;
+  commit_ring_next = (commit_ring_next + 1) % COMMIT_EVENT_RING_SIZE;
+  if (commit_ring_count < COMMIT_EVENT_RING_SIZE) commit_ring_count ++;
 }
 
-void trace_inst_dump(void) {
-  if (iqueue_count == 0) return;
-
-  printf("NEMU recent instructions:\n");
-  int first = (iqueue_next + CONFIG_IQUEUE_SIZE - iqueue_count) % CONFIG_IQUEUE_SIZE;
-  for (int i = 0; i < iqueue_count; i ++) {
-    int idx = (first + i) % CONFIG_IQUEUE_SIZE;
-    printf("  %s%s\n", i == iqueue_count - 1 ? "--> " : "    ", iqueue[idx]);
+void commit_event_dump_last(size_t n) {
+  if (commit_ring_count == 0) return;
+  if (n == 0 || n > commit_ring_count) n = commit_ring_count;
+  size_t first = (commit_ring_next + COMMIT_EVENT_RING_SIZE - n) % COMMIT_EVENT_RING_SIZE;
+  printf("NEMU_LAST_BEGIN count=%zu\n", n);
+  for (size_t i = 0; i < n; i ++) {
+    size_t idx = (first + i) % COMMIT_EVENT_RING_SIZE;
+    char buf[160];
+    commit_event_format(&commit_ring[idx], buf, sizeof(buf));
+    printf("NEMU_LAST %s\n", buf);
   }
+  printf("NEMU_LAST_END\n");
 }
-#endif
 
-#ifdef CONFIG_MTRACE
-bool mtrace_enabled(paddr_t addr) {
-  return addr >= CONFIG_MTRACE_START && addr <= CONFIG_MTRACE_END;
+bool commit_event_get_last(CommitEvent *ev) {
+  if (commit_ring_count == 0) return false;
+  size_t idx = (commit_ring_next + COMMIT_EVENT_RING_SIZE - 1) % COMMIT_EVENT_RING_SIZE;
+  *ev = commit_ring[idx];
+  return true;
 }
-#endif
+
+size_t commit_event_copy_last(CommitEvent *buf, size_t max_n) {
+  size_t n = commit_ring_count < max_n ? commit_ring_count : max_n;
+  size_t first = (commit_ring_next + COMMIT_EVENT_RING_SIZE - n) % COMMIT_EVENT_RING_SIZE;
+  for (size_t i = 0; i < n; i ++) {
+    buf[i] = commit_ring[(first + i) % COMMIT_EVENT_RING_SIZE];
+  }
+  return n;
+}
 
 int is_exit_status_bad() {
   int good = (nemu_state.state == NEMU_END && nemu_state.halt_ret == 0) ||

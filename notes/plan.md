@@ -221,14 +221,22 @@ Sessions:
    - Inject a temporary `addi` bug only during validation, then remove it, to confirm DiffTest reports mismatches.
    - Exit when the tiny `addi`/`jalr`/`ebreak` programs pass with DiffTest enabled and a deliberate mismatch is caught.
 
-7. **P2-S7: Minimal AM `riscv32e-npc` run path**
+7. **P2-S6.5: CommitEvent-based control/debug interface**
+   - Add a shared C-compatible `CommitEvent` format for retired-instruction history and DiffTest comparison.
+   - Refactor NEMU's monitor into a scriptable dispatcher with `-e`/`-f`, while preserving interactive commands and old aliases.
+   - Expose NEMU REF event-step APIs so NPC DiffTest can compare CommitEvent sequences rather than only full architectural state.
+   - Add an NPC command shell with `load`, `reset`, `step`, `run`, `run to`, `run until reg`, `print`, `dump state`, `last`, `log`, and `trace` basics.
+   - Keep passing output concise and dump bounded recent events/registers on failure.
+   - Exit when NEMU script mode, NPC shell runs, and event-based DiffTest tiny tests pass.
+
+8. **P2-S7: Minimal AM `riscv32e-npc` run path**
    - Inspect existing AM support and add only the missing pieces needed for one-command NPC runs.
    - Provide a `run` target for `ARCH=riscv32e-npc` that invokes the NPC simulator with the built image and a limit.
    - Implement or adjust AM `halt()` for NPC so it uses `ebreak` and passes the result code to the harness.
    - Start with `dummy`; do not broaden to all cpu-tests in this phase unless the tiny core already supports the required instructions.
    - Exit when an AM `dummy`-style workload can be built and run on NPC with automatic GOOD/BAD reporting, or when the remaining blocker is narrowed to missing Phase 3 ISA coverage.
 
-8. **P2-S8: Phase 2 closeout and Phase 3 handoff**
+9. **P2-S8: Phase 2 closeout and Phase 3 handoff**
    - Re-run all Phase 2 checks: harness smoke, `addi`, control-flow/trap, memory test, DiffTest tiny tests, and AM `dummy` if available.
    - Update `notes/next.md` with exact commands, pass/fail status, known limitations, and the first Phase 3 instruction group to implement.
    - Keep the handoff focused: no broad RV32E implementation in this phase unless it is necessary to make the Phase 2 harness trustworthy.
