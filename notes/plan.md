@@ -274,12 +274,12 @@ Current skeleton constraints to address early:
 
 Sessions:
 
-1. **P3-S1: Decode/control refactor and first cpu-test beyond dummy**
-   - Refactor `Idu.v` to emit control signals and all immediate formats (`I/S/B/U/J`, CSR address/uimm) instead of one `is_*` wire per instruction.
-   - Keep existing `addi`, `auipc`, `jal`, `jalr`, `lw`, `sw`, and `ebreak` behavior passing.
-   - Add `lui`, the remaining I-type ALU ops, and R-type ALU/compare/shift ops needed by simple `cpu-tests` such as `add`, `sub-longlong`, `bit`, and `shift`.
-   - Preserve RV32E illegal checks for referenced x16-x31.
-   - Exit when the current Phase 2 regression plus at least the first non-`dummy` cpu-test slice passes with DiffTest where supported.
+1. **P3-S1: Decode/control refactor and first cpu-test beyond dummy** — completed
+   - Refactored `Idu.v` to emit compact control signals and all immediate formats (`I/S/B/U/J`) plus CSR address/uimm placeholders instead of one `is_*` wire per instruction.
+   - Kept existing `addi`, `auipc`, `jal`, `jalr`, `lw`, `sw`, and `ebreak` behavior passing.
+   - Added `lui`, the remaining I-type ALU ops, R-type ALU/compare/shift ops, and the B-type branch control needed by the first compiled cpu-test slice.
+   - Preserved RV32E illegal checks for referenced x16-x31 with a directed illegal-register test.
+   - Exit status: full NPC regression passes, `test-difftest` covers the new ALU directed test, and AM `dummy`, `add`, and `shift` pass through `ARCH=riscv32e-npc`.
 
 2. **P3-S2: Branches and byte/halfword memory operations**
    - Implement B-type branches (`beq`, `bne`, `blt`, `bge`, `bltu`, `bgeu`) with target alignment checks.

@@ -15,7 +15,7 @@ ifeq ($(TRACE),1)
 VERILATOR_FLAGS += --trace
 endif
 
-.PHONY: all run smoke test-addi test-jalr-ebreak test-lw-sw test-debug test-difftest clean
+.PHONY: all run smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-rv32e-illegal test-debug test-difftest clean
 
 all: $(BIN)
 
@@ -52,6 +52,19 @@ test-lw-sw: $(BIN)
 	printf '%s\n' "$$out" | grep 'NPC_CHECK x1=0x0000002a expect=0x0000002a PASS' >/dev/null; \
 	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap cycles=5 insts=5 pc=0x00000110 halted=1 limit=16 x1=0x0000002a a0=0x00000000 trap=1' >/dev/null
 
+test-alu: $(BIN)
+	@out="$$($(BIN) --image tests/bin/alu.bin --reset-pc 0x100 --max-cycles 32 --expect-x1 0x12345678 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_TRAP code=1' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_CHECK x1=0x12345678 expect=0x12345678 PASS' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap cycles=21 insts=21 pc=0x00000150 halted=1 limit=32 x1=0x12345678 a0=0x00000000 trap=1' >/dev/null
+
+test-rv32e-illegal: $(BIN)
+	@out="$$($(BIN) --image tests/bin/rv32e-illegal.bin --reset-pc 0x100 --max-cycles 8 2>&1 || true)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=bad reason=illegal_inst cycles=1 insts=1 pc=0x00000100 halted=1 limit=8 x1=0x00000000 a0=0x00000000 trap=2' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_LAST R=1 C=0 PC=00000100 I=00100813 RD=0 RV=00000000 NPC=00000100 EXC=1 CAUSE=2' >/dev/null
+
 test-debug: $(BIN)
 	@out="$$($(BIN) --image tests/bin/jalr-ebreak.bin --reset-pc 0x100 --max-cycles 2 --expect-x1 0x102 2>&1 || true)"; \
 	printf '%s\n' "$$out"; \
@@ -82,7 +95,10 @@ test-difftest: $(BIN)
 	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap cycles=4 insts=4 pc=0x80000010 halted=1 limit=16 x1=0x80000000 a0=0x00000000 trap=1' >/dev/null; \
 	out="$$($(BIN) --image tests/bin/difftest-lw-sw.bin --reset-pc 0x80000000 --max-cycles 16 --expect-x1 0x2a --difftest-ref $(REF_SO) 2>&1)"; \
 	printf '%s\n' "$$out"; \
-	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap cycles=5 insts=5 pc=0x80000010 halted=1 limit=16 x1=0x0000002a a0=0x00000000 trap=1' >/dev/null
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap cycles=5 insts=5 pc=0x80000010 halted=1 limit=16 x1=0x0000002a a0=0x00000000 trap=1' >/dev/null; \
+	out="$$($(BIN) --image tests/bin/difftest-alu.bin --reset-pc 0x80000000 --max-cycles 32 --expect-x1 0x12345678 --difftest-ref $(REF_SO) 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap cycles=21 insts=21 pc=0x80000050 halted=1 limit=32 x1=0x12345678 a0=0x00000000 trap=1' >/dev/null
 
 clean:
 	rm -rf $(BUILD_DIR)

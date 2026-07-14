@@ -40,18 +40,31 @@ module Core #(
   wire [6:0]  funct7;
   wire [31:0] imm_i;
   wire [31:0] imm_s;
+  wire [31:0] imm_b;
   wire [31:0] imm_u;
   wire [31:0] imm_j;
-  wire        is_addi;
-  wire        is_auipc;
-  wire        is_lw;
-  wire        is_sw;
-  wire        is_jalr;
+  wire [11:0] csr_addr;
+  wire [4:0]  csr_uimm;
+  wire [3:0]  alu_op;
+  wire [2:0]  imm_sel;
+  wire [1:0]  wb_sel;
+  wire        src1_pc;
+  wire        src2_imm;
+  wire        mem_ren;
+  wire        mem_wen;
+  wire [1:0]  sys_cmd;
+  wire [2:0]  branch_op;
+  wire        reads_rs1;
+  wire        reads_rs2;
+  wire        writes_rd;
   wire        is_jal;
-  wire        is_ebreak;
+  wire        is_jalr;
   wire        is_legal;
   wire [31:0] rs1_data;
   wire [31:0] rs2_data;
+  wire [31:0] imm_data;
+  wire [31:0] alu_src1;
+  wire [31:0] alu_src2;
   wire [31:0] alu_result;
   wire [31:0] lsu_addr;
   wire [31:0] lsu_rdata;
@@ -59,24 +72,37 @@ module Core #(
   wire        rd_is_rv32e = rd[4] == 1'b0;
   wire        rs1_is_rv32e = rs1[4] == 1'b0;
   wire        rs2_is_rv32e = rs2[4] == 1'b0;
-  wire        writes_rd = is_addi || is_auipc || is_lw || is_jalr || is_jal;
-  wire        reads_rs1 = is_addi || is_lw || is_sw || is_jalr;
-  wire        reads_rs2 = is_sw;
   wire        rd_valid = !writes_rd || rd_is_rv32e;
   wire        rs1_valid = !reads_rs1 || rs1_is_rv32e;
   wire        rs2_valid = !reads_rs2 || rs2_is_rv32e;
   wire        legal_inst = is_legal && rd_valid && rs1_valid && rs2_valid;
   wire        wb_wen = legal_inst && writes_rd;
-  wire        lsu_wen = legal_inst && is_sw;
+  wire        lsu_wen = legal_inst && mem_wen;
   wire [31:0] pc_plus_4 = pc + 32'd4;
+  wire        branch_taken = (branch_op == `NPC_BR_BEQ)  ? (rs1_data == rs2_data) :
+                             (branch_op == `NPC_BR_BNE)  ? (rs1_data != rs2_data) :
+                             (branch_op == `NPC_BR_BLT)  ? ($signed(rs1_data) < $signed(rs2_data)) :
+                             (branch_op == `NPC_BR_BGE)  ? ($signed(rs1_data) >= $signed(rs2_data)) :
+                             (branch_op == `NPC_BR_BLTU) ? (rs1_data < rs2_data) :
+                             (branch_op == `NPC_BR_BGEU) ? (rs1_data >= rs2_data) : 1'b0;
   wire [31:0] jalr_target = (rs1_data + imm_i) & ~32'd1;
   wire [31:0] jal_target = pc + imm_j;
-  wire [31:0] next_pc = is_jalr ? jalr_target : (is_jal ? jal_target : pc_plus_4);
-  wire [31:0] final_wb_data = (is_jalr || is_jal) ? pc_plus_4 : wb_data;
+  wire [31:0] branch_target = pc + imm_b;
+  wire [31:0] next_pc = is_jalr ? jalr_target : (is_jal ? jal_target : (branch_taken ? branch_target : pc_plus_4));
+  wire [31:0] final_wb_data = wb_data;
   wire [1:0]  ebreak_status = (debug_a0 == 32'd0) ? `NPC_STATUS_GOOD : `NPC_STATUS_BAD;
-  wire        unused = |{opcode, funct3, funct7};
+  wire        is_ebreak = sys_cmd == `NPC_SYS_EBREAK;
+  wire        unused = |{opcode, funct3, funct7, csr_addr, csr_uimm};
 
   import "DPI-C" function void npc_trap(input int code);
+
+  assign imm_data = (imm_sel == `NPC_IMM_S) ? imm_s :
+                    (imm_sel == `NPC_IMM_B) ? imm_b :
+                    (imm_sel == `NPC_IMM_U) ? imm_u :
+                    (imm_sel == `NPC_IMM_J) ? imm_j : imm_i;
+  assign alu_src1 = src1_pc ? pc : rs1_data;
+  assign alu_src2 = src2_imm ? imm_data : rs2_data;
+  assign lsu_addr = rs1_data + (mem_wen ? imm_s : imm_i);
 
   assign debug_pc = pc;
   assign debug_halted = halted;
@@ -107,15 +133,25 @@ module Core #(
     .funct7(funct7),
     .imm_i(imm_i),
     .imm_s(imm_s),
+    .imm_b(imm_b),
     .imm_u(imm_u),
     .imm_j(imm_j),
-    .is_addi(is_addi),
-    .is_auipc(is_auipc),
-    .is_lw(is_lw),
-    .is_sw(is_sw),
-    .is_jalr(is_jalr),
+    .csr_addr(csr_addr),
+    .csr_uimm(csr_uimm),
+    .alu_op(alu_op),
+    .imm_sel(imm_sel),
+    .wb_sel(wb_sel),
+    .src1_pc(src1_pc),
+    .src2_imm(src2_imm),
+    .mem_ren(mem_ren),
+    .mem_wen(mem_wen),
+    .sys_cmd(sys_cmd),
+    .branch_op(branch_op),
+    .reads_rs1(reads_rs1),
+    .reads_rs2(reads_rs2),
+    .writes_rd(writes_rd),
     .is_jal(is_jal),
-    .is_ebreak(is_ebreak),
+    .is_jalr(is_jalr),
     .is_legal(is_legal)
   );
 
@@ -135,15 +171,14 @@ module Core #(
   );
 
   Exu u_exu (
-    .src1(is_auipc ? pc : rs1_data),
-    .src2(is_auipc ? imm_u : imm_i),
-    .add_result(alu_result)
+    .alu_op(alu_op),
+    .src1(alu_src1),
+    .src2(alu_src2),
+    .result(alu_result)
   );
 
-  assign lsu_addr = rs1_data + (is_sw ? imm_s : imm_i);
-
   Lsu u_lsu (
-    .ren(!reset && !halted && legal_inst && is_lw),
+    .ren(!reset && !halted && legal_inst && mem_ren),
     .wen(!reset && !halted && lsu_wen),
     .addr(lsu_addr),
     .wdata(rs2_data),
@@ -151,7 +186,7 @@ module Core #(
   );
 
   Wbu u_wbu (
-    .alu_result(is_lw ? lsu_rdata : alu_result),
+    .alu_result((wb_sel == `NPC_WB_MEM) ? lsu_rdata : ((wb_sel == `NPC_WB_PC4) ? pc_plus_4 : alu_result)),
     .wdata(wb_data)
   );
 
