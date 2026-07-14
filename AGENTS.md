@@ -1,6 +1,6 @@
 ## Overview
 
-Your task is to follow the lecture notes of the One Student One Chip Program (一生一芯) to design a processor core using the RV32I instruction set.
+Your task is to follow the lecture notes of the One Student One Chip Program (一生一芯) to design a processor core using the RV32E instruction set.
 
 It is not enough for you to only make it work. Your design will be evaluated for PPA (Performance, Power, and Area), and you will need to optimize it. Also, this is a long-term project, so you need to make it easy to maintain and write good documentation.
 
