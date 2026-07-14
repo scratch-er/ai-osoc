@@ -52,6 +52,8 @@ module Core #(
   wire        src2_imm;
   wire        mem_ren;
   wire        mem_wen;
+  wire [1:0]  mem_size;
+  wire        mem_unsigned;
   wire [1:0]  sys_cmd;
   wire [2:0]  branch_op;
   wire        reads_rs1;
@@ -75,7 +77,16 @@ module Core #(
   wire        rd_valid = !writes_rd || rd_is_rv32e;
   wire        rs1_valid = !reads_rs1 || rs1_is_rv32e;
   wire        rs2_valid = !reads_rs2 || rs2_is_rv32e;
-  wire        legal_inst = is_legal && rd_valid && rs1_valid && rs2_valid;
+  wire        decode_legal = is_legal && rd_valid && rs1_valid && rs2_valid;
+  wire        mem_half_misaligned = mem_size == `NPC_MEM_HALF && lsu_addr[0] != 1'b0;
+  wire        mem_word_misaligned = mem_size == `NPC_MEM_WORD && lsu_addr[1:0] != 2'b00;
+  wire        mem_misaligned = (mem_ren || mem_wen) && (mem_half_misaligned || mem_word_misaligned);
+  wire        branch_target_misaligned;
+  wire        jal_target_misaligned;
+  wire        jalr_target_misaligned;
+  wire        pc_exception;
+  wire        legal_inst;
+  wire [31:0] exception_cause;
   wire        wb_wen = legal_inst && writes_rd;
   wire        lsu_wen = legal_inst && mem_wen;
   wire [31:0] pc_plus_4 = pc + 32'd4;
@@ -89,6 +100,15 @@ module Core #(
   wire [31:0] jal_target = pc + imm_j;
   wire [31:0] branch_target = pc + imm_b;
   wire [31:0] next_pc = is_jalr ? jalr_target : (is_jal ? jal_target : (branch_taken ? branch_target : pc_plus_4));
+  assign branch_target_misaligned = branch_taken && branch_target[1:0] != 2'b00;
+  assign jal_target_misaligned = is_jal && jal_target[1:0] != 2'b00;
+  assign jalr_target_misaligned = is_jalr && jalr_target[1:0] != 2'b00;
+  assign pc_exception = decode_legal && (branch_target_misaligned || jal_target_misaligned || jalr_target_misaligned);
+  assign legal_inst = decode_legal && !mem_misaligned && !pc_exception;
+  assign exception_cause = !decode_legal ? {27'd0, `NPC_EXC_ILLEGAL_INST} :
+                           pc_exception ? {27'd0, `NPC_EXC_INST_ADDR_MISALIGNED} :
+                           (mem_ren && mem_misaligned) ? {27'd0, `NPC_EXC_LOAD_ADDR_MISALIGNED} :
+                           (mem_wen && mem_misaligned) ? {27'd0, `NPC_EXC_STORE_ADDR_MISALIGNED} : 32'd0;
   wire [31:0] final_wb_data = wb_data;
   wire [1:0]  ebreak_status = (debug_a0 == 32'd0) ? `NPC_STATUS_GOOD : `NPC_STATUS_BAD;
   wire        is_ebreak = sys_cmd == `NPC_SYS_EBREAK;
@@ -116,7 +136,7 @@ module Core #(
   assign commit_rd = rd;
   assign commit_wdata = final_wb_data;
   assign commit_exception = !legal_inst;
-  assign commit_cause = legal_inst ? 32'd0 : 32'd2;
+  assign commit_cause = exception_cause;
 
   Ifu u_ifu (
     .pc(fetch_pc),
@@ -145,6 +165,8 @@ module Core #(
     .src2_imm(src2_imm),
     .mem_ren(mem_ren),
     .mem_wen(mem_wen),
+    .mem_size(mem_size),
+    .mem_unsigned(mem_unsigned),
     .sys_cmd(sys_cmd),
     .branch_op(branch_op),
     .reads_rs1(reads_rs1),
@@ -180,6 +202,8 @@ module Core #(
   Lsu u_lsu (
     .ren(!reset && !halted && legal_inst && mem_ren),
     .wen(!reset && !halted && lsu_wen),
+    .size(mem_size),
+    .load_unsigned(mem_unsigned),
     .addr(lsu_addr),
     .wdata(rs2_data),
     .rdata(lsu_rdata)

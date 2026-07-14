@@ -281,11 +281,11 @@ Sessions:
    - Preserved RV32E illegal checks for referenced x16-x31 with a directed illegal-register test.
    - Exit status: full NPC regression passes, `test-difftest` covers the new ALU directed test, and AM `dummy`, `add`, and `shift` pass through `ARCH=riscv32e-npc`.
 
-2. **P3-S2: Branches and byte/halfword memory operations**
-   - Implement B-type branches (`beq`, `bne`, `blt`, `bge`, `bltu`, `bgeu`) with target alignment checks.
-   - Extend the memory interface to support `lb`, `lh`, `lbu`, `lhu`, `sb`, and `sh`, including byte strobes, sign/zero extension, and misalignment exceptions.
-   - Add or adapt tiny directed tests before relying only on compiled cpu-tests.
-   - Exit when representative branch and load/store cpu-tests pass, including `load-store`, `movsx`, `if-else`, and `unalign` behavior consistent with the spec.
+2. **P3-S2: Branches and byte/halfword memory operations** — completed
+   - Extended `Idu.v`, `Core.v`, `Lsu.v`, and the C++ memory backend for `lb`, `lh`, `lbu`, `lhu`, `sb`, `sh`, and masked byte/halfword stores while preserving `lw`/`sw`.
+   - Added branch target, load-address, and store-address alignment checks that report exception causes in `CommitEvent` and halt BAD for now, pending P3-S3 precise trap entry.
+   - Added directed binaries and `test-mem-size` for byte/halfword load-store formatting plus branch/load/store misalignment causes.
+   - Exit status: full NPC regression including `test-mem-size` passes; AM `dummy`, `add`, `shift`, `bit`, `load-store`, `movsx`, `if-else`, `switch`, and `unalign` pass through `ARCH=riscv32e-npc`.
 
 3. **P3-S3: System instructions, CSR file, and precise trap entry**
    - Add `Csr.v` for `mvendorid`, `marchid`, `mstatus`, `mtvec`, `mepc`, and `mcause` only.

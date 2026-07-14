@@ -16,7 +16,7 @@ public:
   void set_trace(bool enable) { trace_ = enable; }
   void copy_to(void *dst, uint32_t addr, uint32_t len) const;
   uint32_t read32(uint32_t addr) const;
-  void write32(uint32_t addr, uint32_t data);
+  void write32(uint32_t addr, uint32_t data, uint8_t wmask = 0xf);
 
 private:
   uint32_t base_addr_;

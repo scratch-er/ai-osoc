@@ -22,6 +22,8 @@ module Idu (
   output        src2_imm,
   output        mem_ren,
   output        mem_wen,
+  output [1:0]  mem_size,
+  output        mem_unsigned,
   output [1:0]  sys_cmd,
   output [2:0]  branch_op,
   output        reads_rs1,
@@ -41,6 +43,8 @@ module Idu (
   wire is_branch;
   wire is_branch_legal;
   wire is_system;
+  wire load_legal;
+  wire store_legal;
   wire shamt_high_valid;
   wire op_imm_legal;
   wire op_legal;
@@ -63,8 +67,8 @@ module Idu (
   assign is_auipc  = opcode == 7'b0010111;
   assign is_jal    = opcode == 7'b1101111;
   assign is_jalr   = opcode == 7'b1100111 && funct3 == 3'b000;
-  assign is_load   = opcode == 7'b0000011 && funct3 == 3'b010;
-  assign is_store  = opcode == 7'b0100011 && funct3 == 3'b010;
+  assign is_load   = opcode == 7'b0000011;
+  assign is_store  = opcode == 7'b0100011;
   assign is_branch = opcode == 7'b1100011;
   assign is_op_imm = opcode == 7'b0010011;
   assign is_op     = opcode == 7'b0110011;
@@ -97,14 +101,20 @@ module Idu (
   assign is_branch_legal = is_branch && (funct3 == 3'b000 || funct3 == 3'b001 ||
                                           funct3 == 3'b100 || funct3 == 3'b101 ||
                                           funct3 == 3'b110 || funct3 == 3'b111);
-  assign is_legal = is_lui || is_auipc || is_jal || is_jalr || is_load || is_store ||
+  assign load_legal = is_load && (funct3 == 3'b000 || funct3 == 3'b001 || funct3 == 3'b010 ||
+                                  funct3 == 3'b100 || funct3 == 3'b101);
+  assign store_legal = is_store && (funct3 == 3'b000 || funct3 == 3'b001 || funct3 == 3'b010);
+  assign is_legal = is_lui || is_auipc || is_jal || is_jalr || load_legal || store_legal ||
                     is_branch_legal || op_imm_legal || op_legal || is_system;
 
   assign reads_rs1 = is_jalr || is_load || is_store || is_branch || is_op_imm || is_op;
   assign reads_rs2 = is_store || is_branch || is_op;
   assign writes_rd = is_lui || is_auipc || is_jal || is_jalr || is_load || is_op_imm || is_op;
-  assign mem_ren = is_load;
-  assign mem_wen = is_store;
+  assign mem_ren = load_legal;
+  assign mem_wen = store_legal;
+  assign mem_size = (funct3[1:0] == 2'b00) ? `NPC_MEM_BYTE :
+                    (funct3[1:0] == 2'b01) ? `NPC_MEM_HALF : `NPC_MEM_WORD;
+  assign mem_unsigned = funct3[2];
   assign sys_cmd = is_system ? `NPC_SYS_EBREAK : `NPC_SYS_NONE;
   assign branch_op = !is_branch ? `NPC_BR_NONE :
                      (funct3 == 3'b000) ? `NPC_BR_BEQ :

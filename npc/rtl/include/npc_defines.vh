@@ -38,6 +38,10 @@
 `define NPC_BR_BLTU 3'd5
 `define NPC_BR_BGEU 3'd6
 
+`define NPC_MEM_BYTE 2'd0
+`define NPC_MEM_HALF 2'd1
+`define NPC_MEM_WORD 2'd2
+
 `define NPC_SYS_NONE   2'd0
 `define NPC_SYS_EBREAK 2'd1
 
