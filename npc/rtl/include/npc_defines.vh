@@ -29,6 +29,7 @@
 `define NPC_WB_ALU 2'd0
 `define NPC_WB_MEM 2'd1
 `define NPC_WB_PC4 2'd2
+`define NPC_WB_CSR 2'd3
 
 `define NPC_BR_NONE 3'd0
 `define NPC_BR_BEQ  3'd1
@@ -42,8 +43,21 @@
 `define NPC_MEM_HALF 2'd1
 `define NPC_MEM_WORD 2'd2
 
-`define NPC_SYS_NONE   2'd0
-`define NPC_SYS_EBREAK 2'd1
+`define NPC_SYS_NONE    3'd0
+`define NPC_SYS_ECALL   3'd1
+`define NPC_SYS_EBREAK  3'd2
+`define NPC_SYS_MRET    3'd3
+`define NPC_SYS_WFI     3'd4
+`define NPC_SYS_FENCE   3'd5
+`define NPC_SYS_FENCE_I 3'd6
+
+`define NPC_CSR_NONE 3'd0
+`define NPC_CSR_RW   3'd1
+`define NPC_CSR_RS   3'd2
+`define NPC_CSR_RC   3'd3
+`define NPC_CSR_RWI  3'd4
+`define NPC_CSR_RSI  3'd5
+`define NPC_CSR_RCI  3'd6
 
 `define NPC_EXC_NONE                  5'd31
 `define NPC_EXC_INST_ADDR_MISALIGNED  5'd0

@@ -12,6 +12,10 @@ module Core #(
   output [31:0] debug_a0,
   output [1:0]  debug_trap_status,
   output [31:0] debug_inst,
+  output [31:0] debug_mstatus,
+  output [31:0] debug_mtvec,
+  output [31:0] debug_mepc,
+  output [31:0] debug_mcause,
   output [511:0] debug_regs_flat,
   output        commit_valid,
   output [31:0] commit_pc,
@@ -54,7 +58,8 @@ module Core #(
   wire        mem_wen;
   wire [1:0]  mem_size;
   wire        mem_unsigned;
-  wire [1:0]  sys_cmd;
+  wire [2:0]  csr_cmd;
+  wire [2:0]  sys_cmd;
   wire [2:0]  branch_op;
   wire        reads_rs1;
   wire        reads_rs2;
@@ -70,6 +75,11 @@ module Core #(
   wire [31:0] alu_result;
   wire [31:0] lsu_addr;
   wire [31:0] lsu_rdata;
+  wire [31:0] csr_rdata;
+  wire [31:0] mtvec;
+  wire [31:0] mepc;
+  wire [31:0] mcause;
+  wire [31:0] mstatus;
   wire [31:0] wb_data;
   wire        rd_is_rv32e = rd[4] == 1'b0;
   wire        rs1_is_rv32e = rs1[4] == 1'b0;
@@ -85,10 +95,15 @@ module Core #(
   wire        jal_target_misaligned;
   wire        jalr_target_misaligned;
   wire        pc_exception;
-  wire        legal_inst;
   wire [31:0] exception_cause;
-  wire        wb_wen = legal_inst && writes_rd;
-  wire        lsu_wen = legal_inst && mem_wen;
+  wire        is_ecall = sys_cmd == `NPC_SYS_ECALL;
+  wire        is_ebreak = sys_cmd == `NPC_SYS_EBREAK;
+  wire        is_mret = sys_cmd == `NPC_SYS_MRET;
+  wire        trap_request;
+  wire        precise_trap;
+  wire        complete_inst;
+  wire        wb_wen;
+  wire        lsu_wen;
   wire [31:0] pc_plus_4 = pc + 32'd4;
   wire        branch_taken = (branch_op == `NPC_BR_BEQ)  ? (rs1_data == rs2_data) :
                              (branch_op == `NPC_BR_BNE)  ? (rs1_data != rs2_data) :
@@ -99,22 +114,31 @@ module Core #(
   wire [31:0] jalr_target = (rs1_data + imm_i) & ~32'd1;
   wire [31:0] jal_target = pc + imm_j;
   wire [31:0] branch_target = pc + imm_b;
-  wire [31:0] next_pc = is_jalr ? jalr_target : (is_jal ? jal_target : (branch_taken ? branch_target : pc_plus_4));
+  wire [31:0] normal_next_pc = is_mret ? mepc : (is_jalr ? jalr_target : (is_jal ? jal_target : (branch_taken ? branch_target : pc_plus_4)));
+  wire [31:0] final_wb_data = wb_data;
+  wire [1:0]  ebreak_status = (debug_a0 == 32'd0) ? `NPC_STATUS_GOOD : `NPC_STATUS_BAD;
+  wire        harness_ebreak = is_ebreak && mtvec == 32'd0;
+  wire        bad_without_vector;
+  wire        unused = |{opcode, funct3, funct7, mcause};
+
+  import "DPI-C" function void npc_trap(input int code);
+
   assign branch_target_misaligned = branch_taken && branch_target[1:0] != 2'b00;
   assign jal_target_misaligned = is_jal && jal_target[1:0] != 2'b00;
   assign jalr_target_misaligned = is_jalr && jalr_target[1:0] != 2'b00;
   assign pc_exception = decode_legal && (branch_target_misaligned || jal_target_misaligned || jalr_target_misaligned);
-  assign legal_inst = decode_legal && !mem_misaligned && !pc_exception;
   assign exception_cause = !decode_legal ? {27'd0, `NPC_EXC_ILLEGAL_INST} :
                            pc_exception ? {27'd0, `NPC_EXC_INST_ADDR_MISALIGNED} :
                            (mem_ren && mem_misaligned) ? {27'd0, `NPC_EXC_LOAD_ADDR_MISALIGNED} :
-                           (mem_wen && mem_misaligned) ? {27'd0, `NPC_EXC_STORE_ADDR_MISALIGNED} : 32'd0;
-  wire [31:0] final_wb_data = wb_data;
-  wire [1:0]  ebreak_status = (debug_a0 == 32'd0) ? `NPC_STATUS_GOOD : `NPC_STATUS_BAD;
-  wire        is_ebreak = sys_cmd == `NPC_SYS_EBREAK;
-  wire        unused = |{opcode, funct3, funct7, csr_addr, csr_uimm};
-
-  import "DPI-C" function void npc_trap(input int code);
+                           (mem_wen && mem_misaligned) ? {27'd0, `NPC_EXC_STORE_ADDR_MISALIGNED} :
+                           is_ecall ? {27'd0, `NPC_EXC_ECALL_M} :
+                           (is_ebreak && !harness_ebreak) ? {27'd0, `NPC_EXC_BREAKPOINT} : 32'd0;
+  assign trap_request = !decode_legal || pc_exception || mem_misaligned || is_ecall || (is_ebreak && !harness_ebreak);
+  assign precise_trap = trap_request && mtvec != 32'd0;
+  assign bad_without_vector = trap_request && mtvec == 32'd0;
+  assign complete_inst = decode_legal && !mem_misaligned && !pc_exception && !is_ecall && !precise_trap;
+  assign wb_wen = complete_inst && writes_rd && !is_mret && !harness_ebreak;
+  assign lsu_wen = complete_inst && mem_wen;
 
   assign imm_data = (imm_sel == `NPC_IMM_S) ? imm_s :
                     (imm_sel == `NPC_IMM_B) ? imm_b :
@@ -128,14 +152,18 @@ module Core #(
   assign debug_halted = halted;
   assign debug_trap_status = trap_status;
   assign debug_inst = inst;
+  assign debug_mstatus = mstatus;
+  assign debug_mtvec = mtvec;
+  assign debug_mepc = mepc;
+  assign debug_mcause = mcause;
   assign commit_valid = !reset && !halted;
   assign commit_pc = pc;
   assign commit_inst = inst;
-  assign commit_next_pc = legal_inst ? next_pc : pc;
+  assign commit_next_pc = precise_trap ? mtvec : (bad_without_vector ? pc : normal_next_pc);
   assign commit_wen = wb_wen && rd != 5'd0;
   assign commit_rd = rd;
   assign commit_wdata = final_wb_data;
-  assign commit_exception = !legal_inst;
+  assign commit_exception = bad_without_vector;
   assign commit_cause = exception_cause;
 
   Ifu u_ifu (
@@ -167,6 +195,7 @@ module Core #(
     .mem_wen(mem_wen),
     .mem_size(mem_size),
     .mem_unsigned(mem_unsigned),
+    .csr_cmd(csr_cmd),
     .sys_cmd(sys_cmd),
     .branch_op(branch_op),
     .reads_rs1(reads_rs1),
@@ -200,7 +229,7 @@ module Core #(
   );
 
   Lsu u_lsu (
-    .ren(!reset && !halted && legal_inst && mem_ren),
+    .ren(!reset && !halted && complete_inst && mem_ren),
     .wen(!reset && !halted && lsu_wen),
     .size(mem_size),
     .load_unsigned(mem_unsigned),
@@ -209,8 +238,28 @@ module Core #(
     .rdata(lsu_rdata)
   );
 
+  Csr u_csr (
+    .clock(clock),
+    .reset(reset),
+    .addr(csr_addr),
+    .cmd(csr_cmd),
+    .rs1_data(rs1_data),
+    .uimm(csr_uimm),
+    .commit_en(!reset && !halted && complete_inst && csr_cmd != `NPC_CSR_NONE),
+    .trap_en(!reset && !halted && precise_trap),
+    .trap_pc(pc),
+    .trap_cause(exception_cause),
+    .rdata(csr_rdata),
+    .mtvec(mtvec),
+    .mepc(mepc),
+    .mcause(mcause),
+    .mstatus(mstatus)
+  );
+
   Wbu u_wbu (
-    .alu_result((wb_sel == `NPC_WB_MEM) ? lsu_rdata : ((wb_sel == `NPC_WB_PC4) ? pc_plus_4 : alu_result)),
+    .alu_result((wb_sel == `NPC_WB_MEM) ? lsu_rdata :
+                ((wb_sel == `NPC_WB_PC4) ? pc_plus_4 :
+                 ((wb_sel == `NPC_WB_CSR) ? csr_rdata : alu_result))),
     .wdata(wb_data)
   );
 
@@ -220,17 +269,17 @@ module Core #(
       halted <= 1'b0;
       trap_status <= `NPC_STATUS_RUNNING;
     end else if (!halted) begin
-      if (legal_inst) begin
-        if (is_ebreak) begin
-          halted <= 1'b1;
-          trap_status <= ebreak_status;
-          npc_trap({30'd0, ebreak_status});
-        end else begin
-          pc <= next_pc;
-        end
-      end else begin
+      if (harness_ebreak && complete_inst) begin
+        halted <= 1'b1;
+        trap_status <= ebreak_status;
+        npc_trap({30'd0, ebreak_status});
+      end else if (bad_without_vector) begin
         halted <= 1'b1;
         trap_status <= `NPC_STATUS_BAD;
+      end else if (precise_trap) begin
+        pc <= mtvec;
+      end else begin
+        pc <= normal_next_pc;
       end
     end
   end

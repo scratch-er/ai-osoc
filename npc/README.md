@@ -2,9 +2,9 @@
 
 Initial Verilog NPC project for the RV32E_Zicsr core.
 
-Current status: Phase 3 is complete through `P3-S2: Branches and byte/halfword memory operations`. The RTL fetches instructions through DPI-C memory, executes RV32E `lui`, `auipc`, `jal`, `jalr`, B-type branches with target-alignment checks, `lb`/`lh`/`lw`/`lbu`/`lhu`, `sb`/`sh`/`sw`, the RV32E integer ALU/compare/shift subset, keeps `x0` immutable, and terminates on `ebreak` with GOOD/BAD status from `a0` (`x10 == 0` means GOOD). Unsupported instructions, x16-x31 references, and misaligned branch/load/store operations halt with BAD status until precise traps are implemented.
+Current status: Phase 3 is complete through `P3-S3: System instructions, CSR file, and precise trap entry`. The RTL fetches instructions through DPI-C memory, executes RV32E `lui`, `auipc`, `jal`, `jalr`, B-type branches with target-alignment checks, `lb`/`lh`/`lw`/`lbu`/`lhu`, `sb`/`sh`/`sw`, the RV32E integer ALU/compare/shift subset, Zicsr for the required M-mode CSRs, `ecall`, architectural `ebreak`, `mret`, `wfi`, `fence`, and `fence.i`. It keeps `x0` immutable, implements precise trap entry when `mtvec` is nonzero, and preserves the test-harness `ebreak` GOOD/BAD termination convention when `mtvec == 0`.
 
-The C++ Verilator harness now centers debugging around retired-instruction `CommitEvent`s. It has a scriptable command shell, bounded `last [n]` history, stable `NPC_RESULT` lines, and event-sequence DiffTest against the NEMU REF shared object when the REF exports `difftest_step_event()`.
+The C++ Verilator harness now centers debugging around retired-instruction `CommitEvent`s. It has a scriptable command shell, bounded `last [n]` history, stable `NPC_RESULT`/`NPC_CSR` lines, and event-sequence DiffTest against the NEMU REF shared object when the REF exports `difftest_step_event()`.
 
 ## Commands
 
@@ -24,6 +24,7 @@ make -C npc test-lw-sw
 make -C npc test-alu
 make -C npc test-mem-size
 make -C npc test-rv32e-illegal
+make -C npc test-csr-trap
 make -C npc test-debug
 make -C npc test-difftest
 ```
@@ -31,7 +32,7 @@ make -C npc test-difftest
 Or all current checks:
 
 ```sh
-make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-debug test-difftest
+make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest
 ```
 
 Run with an optional image, reset PC, cycle limit, optional x1 check, and optional DiffTest REF:
@@ -85,6 +86,7 @@ The simulator prints stable result lines of the form:
 
 ```text
 NPC_RESULT status=... reason=... cycles=... insts=... pc=... halted=... limit=... x1=... a0=... trap=...
+NPC_CSR mstatus=... mtvec=... mepc=... mcause=...
 ```
 
 Failure runs and explicit `last [n]` commands print bounded recent CommitEvents:

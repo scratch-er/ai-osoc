@@ -165,7 +165,8 @@ public:
 
       if (difftest_.enabled()) {
         auto regs = debug_regs(top_);
-        if (!difftest_.step(ev, regs.data(), top_.debug_pc)) {
+        if (!difftest_.step(ev, regs.data(), top_.debug_pc, top_.debug_mstatus,
+                            top_.debug_mtvec, top_.debug_mepc, top_.debug_mcause)) {
           difftest_.dump_last_ref(8);
           return {"bad", "difftest_mismatch"};
         }
@@ -520,7 +521,8 @@ int main(int argc, char **argv) {
 
   if (!args.difftest_ref.empty()) {
     auto regs = debug_regs(*top);
-    if (!difftest.init(args.difftest_ref, memory, args.reset_pc, regs.data(), top->debug_pc)) {
+    if (!difftest.init(args.difftest_ref, memory, args.reset_pc, regs.data(), top->debug_pc,
+                       top->debug_mstatus, top->debug_mtvec, top->debug_mepc, top->debug_mcause)) {
       std::printf("NPC_RESULT status=bad reason=difftest_init_failed cycles=0 pc=0x%08x\n", top->debug_pc);
       return 1;
     }
@@ -560,6 +562,8 @@ int main(int argc, char **argv) {
               top->debug_x1,
               top->debug_a0,
               trap_status);
+  std::printf("NPC_CSR mstatus=0x%08x mtvec=0x%08x mepc=0x%08x mcause=0x%08x\n",
+              top->debug_mstatus, top->debug_mtvec, top->debug_mepc, top->debug_mcause);
 
   bool run_pass = check_pass && result.status == "good";
   if (args.dump_trace || !run_pass) {

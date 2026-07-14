@@ -10,17 +10,23 @@ constexpr bool DIFFTEST_TO_DUT = false;
 constexpr bool DIFFTEST_TO_REF = true;
 }
 
-void Difftest::fill_state(CPUState *state, const uint32_t *regs, uint32_t pc) {
+void Difftest::fill_state(CPUState *state, const uint32_t *regs, uint32_t pc,
+                          uint32_t mstatus, uint32_t mtvec, uint32_t mepc, uint32_t mcause) {
   std::memset(state, 0, sizeof(*state));
   for (int i = 0; i < 16; i++) {
     state->gpr[i] = regs[i];
   }
   state->gpr[0] = 0;
   state->pc = pc;
+  state->mstatus = mstatus;
+  state->mtvec = mtvec;
+  state->mepc = mepc;
+  state->mcause = mcause;
 }
 
 bool Difftest::init(const std::string &ref_so, const Memory &memory, uint32_t reset_pc,
-                    const uint32_t *regs, uint32_t pc) {
+                    const uint32_t *regs, uint32_t pc, uint32_t mstatus, uint32_t mtvec,
+                    uint32_t mepc, uint32_t mcause) {
   handle_ = dlopen(ref_so.c_str(), RTLD_LAZY);
   if (handle_ == nullptr) {
     std::fprintf(stderr, "difftest dlopen failed: %s\n", dlerror());
@@ -45,7 +51,7 @@ bool Difftest::init(const std::string &ref_so, const Memory &memory, uint32_t re
   ref_memcpy_(reset_pc, image.data(), image.size(), DIFFTEST_TO_REF);
 
   CPUState dut;
-  fill_state(&dut, regs, pc);
+  fill_state(&dut, regs, pc, mstatus, mtvec, mepc, mcause);
   ref_regcpy_(&dut, DIFFTEST_TO_REF);
   enabled_ = true;
   std::printf("NPC_DIFFTEST status=on ref=%s base=0x%08x size=%u event_api=%u\n",
@@ -53,7 +59,8 @@ bool Difftest::init(const std::string &ref_so, const Memory &memory, uint32_t re
   return true;
 }
 
-bool Difftest::step(const CommitEvent &dut_event, const uint32_t *regs, uint32_t pc) {
+bool Difftest::step(const CommitEvent &dut_event, const uint32_t *regs, uint32_t pc,
+                    uint32_t mstatus, uint32_t mtvec, uint32_t mepc, uint32_t mcause) {
   if (!enabled_) {
     return true;
   }
@@ -64,7 +71,7 @@ bool Difftest::step(const CommitEvent &dut_event, const uint32_t *regs, uint32_t
     if (!check_event(ref_event, dut_event)) {
       CPUState ref;
       ref_regcpy_(&ref, DIFFTEST_TO_DUT);
-      check_regs(ref, regs, pc);
+      check_regs(ref, regs, pc, mstatus, mtvec, mepc, mcause);
       return false;
     }
     return true;
@@ -73,7 +80,7 @@ bool Difftest::step(const CommitEvent &dut_event, const uint32_t *regs, uint32_t
   ref_exec_(1);
   CPUState ref;
   ref_regcpy_(&ref, DIFFTEST_TO_DUT);
-  return check_regs(ref, regs, pc);
+  return check_regs(ref, regs, pc, mstatus, mtvec, mepc, mcause);
 }
 
 bool Difftest::check_event(const CommitEvent &ref, const CommitEvent &dut) const {
@@ -92,7 +99,8 @@ bool Difftest::check_event(const CommitEvent &ref, const CommitEvent &dut) const
   return false;
 }
 
-bool Difftest::check_regs(const CPUState &ref, const uint32_t *regs, uint32_t pc) const {
+bool Difftest::check_regs(const CPUState &ref, const uint32_t *regs, uint32_t pc,
+                          uint32_t mstatus, uint32_t mtvec, uint32_t mepc, uint32_t mcause) const {
   bool ok = true;
   if (ref.pc != pc) {
     std::printf("NPC_DIFFTEST mismatch pc dut=0x%08x ref=0x%08x\n", pc, ref.pc);
@@ -110,6 +118,22 @@ bool Difftest::check_regs(const CPUState &ref, const uint32_t *regs, uint32_t pc
       std::printf("NPC_DIFFTEST mismatch x%d dut=unused ref=0x%08x\n", i, ref.gpr[i]);
       ok = false;
     }
+  }
+  if (ref.mstatus != mstatus) {
+    std::printf("NPC_DIFFTEST mismatch mstatus dut=0x%08x ref=0x%08x\n", mstatus, ref.mstatus);
+    ok = false;
+  }
+  if (ref.mtvec != mtvec) {
+    std::printf("NPC_DIFFTEST mismatch mtvec dut=0x%08x ref=0x%08x\n", mtvec, ref.mtvec);
+    ok = false;
+  }
+  if (ref.mepc != mepc) {
+    std::printf("NPC_DIFFTEST mismatch mepc dut=0x%08x ref=0x%08x\n", mepc, ref.mepc);
+    ok = false;
+  }
+  if (ref.mcause != mcause) {
+    std::printf("NPC_DIFFTEST mismatch mcause dut=0x%08x ref=0x%08x\n", mcause, ref.mcause);
+    ok = false;
   }
   if (!ok) {
     std::printf("NPC_DIFFTEST status=fail\n");

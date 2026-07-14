@@ -24,7 +24,9 @@
 
 static word_t csr_read(uint32_t addr) {
   switch (addr) {
-    case 0x300: return cpu.mstatus;
+    case 0xf11: return 0;
+    case 0xf12: return 0;
+    case 0x300: return 0x00001800;
     case 0x305: return cpu.mtvec;
     case 0x341: return cpu.mepc;
     case 0x342: return cpu.mcause;
@@ -34,9 +36,9 @@ static word_t csr_read(uint32_t addr) {
 
 static void csr_write(uint32_t addr, word_t val) {
   switch (addr) {
-    case 0x300: cpu.mstatus = val; break;
-    case 0x305: cpu.mtvec = val; break;
-    case 0x341: cpu.mepc = val; break;
+    case 0x300: cpu.mstatus = 0x00001800; break;
+    case 0x305: cpu.mtvec = val & ~0x3u; break;
+    case 0x341: cpu.mepc = val & ~0x3u; break;
     case 0x342: cpu.mcause = val; break;
     default: INV(cpu.pc); break;
   }

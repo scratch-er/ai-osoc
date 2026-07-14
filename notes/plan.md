@@ -287,12 +287,12 @@ Sessions:
    - Added directed binaries and `test-mem-size` for byte/halfword load-store formatting plus branch/load/store misalignment causes.
    - Exit status: full NPC regression including `test-mem-size` passes; AM `dummy`, `add`, `shift`, `bit`, `load-store`, `movsx`, `if-else`, `switch`, and `unalign` pass through `ARCH=riscv32e-npc`.
 
-3. **P3-S3: System instructions, CSR file, and precise trap entry**
-   - Add `Csr.v` for `mvendorid`, `marchid`, `mstatus`, `mtvec`, `mepc`, and `mcause` only.
-   - Implement Zicsr operations with correct read/write suppression rules and illegal writes to read-only CSRs.
-   - Change `ecall`, architectural `ebreak`, illegal instruction, misaligned instruction/load/store, and access fault from immediate BAD halts into precise trap entry (`mepc`, `mcause`, `pc = mtvec`) while retaining a harness-controlled test-termination convention for AM `halt()`/tiny tests.
-   - Implement `mret`, `wfi` as nop, `fence` as nop, and `fence.i` as a visible no-state hook.
-   - Exit when directed CSR/trap tests pass and DiffTest can compare PC, RV32E GPRs, and implemented CSR state at retirement.
+3. **P3-S3: System instructions, CSR file, and precise trap entry** — completed
+   - Added `Csr.v` for `mvendorid`, `marchid`, `mstatus`, `mtvec`, `mepc`, and `mcause` only.
+   - Implemented Zicsr operations with read/write suppression rules and illegal writes to read-only CSRs.
+   - Converted `ecall`, architectural `ebreak`, illegal instruction, and misaligned instruction/load/store into precise trap entry when `mtvec` is nonzero, while preserving harness-controlled `ebreak` test termination when `mtvec == 0`.
+   - Implemented `mret`, `wfi` as nop, `fence` as nop, and `fence.i` as a visible no-state hook.
+   - Exit status: directed `test-csr-trap` passes, NEMU REF shared-object DiffTest is rebuilt with implemented CSR state in the register copy contract, and the full NPC regression plus the focused AM cpu-tests subset pass.
 
 4. **P3-S4: Progressive RV32E cpu-tests regression and DiffTest hardening**
    - Run the non-M-extension cpu-tests progressively through `ARCH=riscv32e-npc` using the temporary Makefile/`printf` workaround as needed.

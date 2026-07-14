@@ -33,7 +33,7 @@ static void restart() {
   /* The zero register is always 0. */
   cpu.gpr[0] = 0;
 
-  cpu.mstatus = 0;
+  cpu.mstatus = 0x00001800;
   cpu.mtvec = 0;
   cpu.mepc = 0;
   cpu.mcause = 0;

@@ -15,7 +15,7 @@ ifeq ($(TRACE),1)
 VERILATOR_FLAGS += --trace
 endif
 
-.PHONY: all run smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-debug test-difftest clean
+.PHONY: all run smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest clean
 
 all: $(BIN)
 
@@ -72,6 +72,24 @@ test-mem-size: $(BIN)
 	out="$$($(BIN) --image tests/bin/branch-misaligned.bin --reset-pc 0x100 --max-cycles 8 2>&1 || true)"; \
 	printf '%s\n' "$$out"; \
 	printf '%s\n' "$$out" | grep 'NPC_LAST R=1 C=0 PC=00000100 I=00000163 RD=0 RV=00000000 NPC=00000100 EXC=1 CAUSE=0' >/dev/null
+
+
+test-csr-trap: $(BIN)
+	@out="$$($(BIN) --image tests/bin/csr-basic.bin --reset-pc 0x100 --max-cycles 32 --expect-x1 0x14c 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap cycles=13 insts=13 pc=0x00000130 halted=1 limit=32 x1=0x0000014c a0=0x00000000 trap=1' >/dev/null; \
+	out="$$($(BIN) --image tests/bin/ecall-trap.bin --reset-pc 0x100 --max-cycles 32 --expect-x1 0x117 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_CSR mstatus=0x00001800 mtvec=0x00000000 mepc=0x0000010c mcause=0x0000000b' >/dev/null; \
+	out="$$($(BIN) --image tests/bin/illegal-mret.bin --reset-pc 0x100 --max-cycles 32 --expect-x1 0x55 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_CSR mstatus=0x00001800 mtvec=0x00000000 mepc=0x00000110 mcause=0x00000002' >/dev/null; \
+	out="$$($(BIN) --image tests/bin/sys-nop.bin --reset-pc 0x100 --max-cycles 16 --expect-x1 0x7 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap cycles=5 insts=5 pc=0x00000110 halted=1 limit=16 x1=0x00000007 a0=0x00000000 trap=1' >/dev/null; \
+	out="$$($(BIN) --image tests/bin/csr-readonly-illegal.bin --reset-pc 0x100 --max-cycles 8 2>&1 || true)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_LAST R=1 C=0 PC=00000100 I=f1101073 RD=0 RV=00000000 NPC=00000100 EXC=1 CAUSE=2' >/dev/null
 
 
 test-rv32e-illegal: $(BIN)
