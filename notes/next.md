@@ -3,9 +3,11 @@
 Current state:
 
 - Phase 1 (`NEMU and AM Foundation`) is closed through Session 8.
-- NEMU can serve as the automated software reference stack for starting `npc/` from scratch.
-- `npc/` is still absent; no NPC RTL files have been created yet.
-- Repository status before Phase 1 work already had untracked `.DS_Store` and `activate`. Leave them alone unless the user explicitly asks.
+- Phase 2 has started.
+- `P2-S1: NPC project skeleton and Verilator harness` is complete enough to hand off to `P2-S2`.
+- NPC implementation style is now **Verilog**.
+- Repository status before Phase 2 already had untracked `.DS_Store` and `activate`; leave them alone unless the user explicitly asks.
+- A git commit has not been made yet because tool policy requires explicit user confirmation before git mutations.
 
 Submodules reported earlier by `git submodule status`:
 
@@ -34,7 +36,7 @@ NEMU/AM current configuration:
   - `abstract-machine/am/include/stddef.h`
   - `abstract-machine/am/include/stdbool.h`
 
-Important completed changes by session:
+Important completed changes before Phase 2:
 
 - P1-S2:
   - `nemu/src/monitor/monitor.c`: removed the intentional PA skeleton `assert(0)` from `welcome()`.
@@ -61,119 +63,82 @@ Important completed changes by session:
   - `nemu/src/memory/paddr.c` provides a minimal `0xa00003f8` serial MMIO fallback when `CONFIG_DEVICE` is off, enough for AM `putch()`/`hello` output without requiring SDL2-backed devices.
 - P1-S8:
   - Re-ran the standard smoke set and confirmed Phase 1 remains green.
-  - Compared Verilog and Chisel for NPC implementation style. Tentative decision: start NPC in Verilog, unless the user revises this decision.
+  - Decided to start NPC in Verilog.
+
+Current session completed work:
+
+- Wrote the approved ISA/datapath design note:
+  - `notes/npc-datapath-and-isa-plan.md`
+- Created initial `npc/` project skeleton:
+  - `npc/Makefile`
+  - `npc/README.md`
+  - `npc/.gitignore`
+  - `npc/rtl/NPC.v`
+  - `npc/rtl/include/npc_defines.vh`
+  - `npc/rtl/core/Core.v`
+  - `npc/rtl/core/Ifu.v`
+  - `npc/rtl/core/Idu.v`
+  - `npc/rtl/core/RegFile.v`
+  - `npc/rtl/core/Exu.v`
+  - `npc/rtl/core/Lsu.v`
+  - `npc/rtl/core/Csr.v`
+  - `npc/rtl/core/Wbu.v`
+  - `npc/rtl/bus/MemIf.v`
+  - `npc/csrc/main.cpp`
+  - `npc/csrc/memory.h`
+  - `npc/csrc/memory.cpp`
+  - `npc/csrc/dpi.h`
+  - `npc/csrc/dpi.cpp`
+  - `npc/tests/hex/empty.hex`
+- Current RTL is intentionally only a P2-S1 skeleton:
+  - `Core.v` resets `pc` to `io_reset_pc`, or the `RESET_PC` parameter when `io_reset_pc == 0`.
+  - Default reset PC is `0x20000000`.
+  - On each cycle after reset, `pc` increments by 4.
+  - No real instruction fetch/decode/execute has been implemented yet.
+- Harness features now present:
+  - `--image FILE` loads a binary blob into host memory at the reset PC base.
+  - `--reset-pc HEX` configures reset PC at runtime.
+  - `--max-cycles N` limits execution.
+  - `--wave` is supported when built with `TRACE=1`.
+  - Stable result line: `NPC_RESULT status=... cycles=... pc=... halted=... limit=...`.
 
 Validated commands and current results:
 
-1. Native NEMU build and built-in image:
+1. NPC deterministic smoke test:
 
    ```sh
-   cd nemu
-   make -j$(sysctl -n hw.ncpu)
-   ./build/riscv32-nemu-interpreter --batch --max-insts=100
+   make -C npc smoke
    ```
 
    Result:
 
    ```text
-   NEMU_RESULT status=good state=2 halt_pc=0x8000000c halt_ret=0 insts=4 limit=100
+   NPC_RESULT status=limit cycles=8 pc=0x20000020 halted=0 limit=8
    ```
 
-2. Instruction-limit failure path:
+2. NPC image-load and custom reset PC check:
 
    ```sh
-   cd nemu
-   ./build/riscv32-nemu-interpreter --batch --max-insts=2
-   ```
-
-   Result includes:
-
-   ```text
-   NEMU_RESULT status=limit state=5 halt_pc=0x80000008 halt_ret=1 insts=2 limit=2
-   ```
-
-3. Current cpu-test slice, checking `NEMU_RESULT status=good` for each test:
-
-   ```sh
-   source ./activate
-   cd am-kernels/tests/cpu-tests
-   for t in dummy add add-longlong bit bubble-sort crc32 fib if-else load-store max min3 mov-c movsx pascal quick-sort select-sort shift sub-longlong sum switch to-lower-case unalign; do
-     printf 'NAME = %s\nSRCS = tests/%s.c\ninclude %s/Makefile\n' "$t" "$t" "$AM_HOME" > Makefile.$t
-     out=$(make -f Makefile.$t ARCH=riscv32-nemu CROSS_COMPILE=riscv64-elf- run 2>&1)
-     status=$?
-     rm -f Makefile.$t
-     printf '%s\n' "$out" | grep 'NEMU_RESULT status=good' >/dev/null || { printf '%s\n' "$out"; exit 1; }
-     printf '%s PASS %s\n' "$t" "$(printf '%s\n' "$out" | grep 'NEMU_RESULT' | tail -1)"
-     [ $status -eq 0 ] || exit $status
-   done
-   ```
-
-   Result on P1-S8: all 22 listed tests pass with `NEMU_RESULT status=good`.
-
-4. AM `hello` workload:
-
-   ```sh
-   source ./activate
-   cd am-kernels/kernels/hello
-   make ARCH=riscv32-nemu CROSS_COMPILE=riscv64-elf- run
+   make -C npc run ARGS="--image tests/hex/empty.hex --reset-pc 0x20000010 --max-cycles 2" || true
    ```
 
    Result:
 
    ```text
-   Hello, AbstractMachine!
-   mainargs = ''.
-   NEMU_RESULT status=good state=2 halt_pc=0x800000c4 halt_ret=0 insts=352 limit=10000000
+   NPC_IMAGE path=tests/hex/empty.hex base=0x20000010 size=9
+   NPC_RESULT status=limit cycles=2 pc=0x20000018 halted=0 limit=2
    ```
 
-5. REF shared object and API smoke test:
-
-   ```sh
-   cd nemu
-   cp .config /tmp/nemu.config.before-p1s8
-   python3 - <<'PY'
-   from pathlib import Path
-   p = Path('.config')
-   lines = p.read_text().splitlines()
-   out = []
-   seen_share = seen_native = False
-   for line in lines:
-       if line.startswith('CONFIG_TARGET_NATIVE_ELF=') or line == 'CONFIG_TARGET_NATIVE_ELF=y':
-           out.append('# CONFIG_TARGET_NATIVE_ELF is not set')
-           seen_native = True
-       elif line.startswith('# CONFIG_TARGET_NATIVE_ELF is not set'):
-           out.append('# CONFIG_TARGET_NATIVE_ELF is not set')
-           seen_native = True
-       elif line.startswith('CONFIG_TARGET_SHARE=') or line == 'CONFIG_TARGET_SHARE=y':
-           out.append('CONFIG_TARGET_SHARE=y')
-           seen_share = True
-       elif line.startswith('# CONFIG_TARGET_SHARE is not set'):
-           out.append('CONFIG_TARGET_SHARE=y')
-           seen_share = True
-       else:
-           out.append(line)
-   if not seen_native:
-       out.append('# CONFIG_TARGET_NATIVE_ELF is not set')
-   if not seen_share:
-       out.append('CONFIG_TARGET_SHARE=y')
-   p.write_text('\n'.join(out) + '\n')
-   PY
-   tools/kconfig/build/conf -s --syncconfig Kconfig
-   make -j$(sysctl -n hw.ncpu)
-   python3 tools/ref-api-smoke.py ./build/riscv32-nemu-interpreter-so
-   cp /tmp/nemu.config.before-p1s8 .config
-   tools/kconfig/build/conf -s --syncconfig Kconfig
-   make -j$(sysctl -n hw.ncpu)
-   ```
-
-   Result:
-
-   ```text
-   REF_API_SMOKE status=pass pc=0x80000004 x0=0x00000000 t0=0x80000000 mem_addr=0x80000100
-   ```
+   The `|| true` is currently needed because the simulator returns nonzero on instruction/cycle limit. This is acceptable for ad hoc limit checks; `make -C npc smoke` wraps the expected limit result and exits successfully.
 
 Known caveats:
 
+- NPC does not execute instructions yet; P2-S2 starts the real datapath with `addi`.
+- `npc/tests/hex/empty.hex` is just text content for loader plumbing, not an executed hex parser/program. The current loader treats any file as raw bytes.
+- `npc/csrc/memory.cpp` allocates host memory and loads images but the RTL does not yet call into it for fetch.
+- `npc/csrc/dpi.cpp` contains only a placeholder `npc_trap()` print helper.
+- Verilator build output is still somewhat verbose on clean builds, but warnings from third-party headers are suppressed enough to keep logs manageable.
+- `make -C npc run` propagates simulator nonzero exit on `status=limit`; keep using `smoke` for the deterministic passing check until real program termination exists.
 - `difftest_raise_intr()` in the NEMU REF shared object still asserts. Current normal NEMU trap execution supports the minimal AM `ecall`/`mret` path, but the REF external interrupt API is not implemented.
 - The current DiffTest register blob is still `DIFFTEST_REG_SIZE`, i.e. 32 riscv32 GPRs plus PC. CSR state is not included in the DiffTest copy/check contract yet.
 - `CONFIG_IQUEUE=y` builds Capstone under `nemu/tools/capstone/repo/` if not already present, because the ring buffer stores disassembled instruction strings. This directory is ignored/generated tooling.
@@ -183,67 +148,41 @@ Known caveats:
 - `abstract-machine/scripts/riscv32-nemu.mk` still defaults `CROSS_COMPILE := riscv64-linux-gnu-`; continue passing `CROSS_COMPILE=riscv64-elf-` unless the toolchain/default is changed.
 - Devices remain disabled; the minimal serial fallback is intentionally not a full device model.
 
-NPC implementation style decision:
-
-- Tentative choice: **Verilog** for the initial NPC.
-- Why:
-  - The first NPC target is a small RV32E_Zicsr core plus a Verilator harness; explicit RTL is enough and keeps the generated artifact/debug path direct.
-  - Verilog has wider examples and training coverage for an AI agent than Chisel. This matters because the user explicitly noted that AI may be less skilled in Chisel due to lack of training data.
-  - Verilog avoids a Scala/Chisel generator layer while the design is still changing quickly.
-  - `specs/core.md` accepts both styles, and its Chisel note is about FIRRTL ABI compatibility, not a requirement to use Chisel.
-  - The repository has Chisel in `ysyxSoC/`, and local tools include `mill`, `sbt`, `scala`, and Java, so Chisel remains possible later if generator benefits become compelling.
-- Main trade-off:
-  - Chisel would be better if we need heavily parameterized buses/caches or want to reuse `ysyxSoC` Chisel idioms directly.
-  - Verilog is better for the near-term single-core, small-module, DiffTest-driven bring-up because it is simpler to inspect, simulate, and debug.
-- User revision point:
-  - If the user prefers Chisel despite the AI-training-data risk, revise Phase 2 before creating `npc/`.
-
 Next work:
 
-Phase 2 is now planned in detail in `notes/plan.md`. Use Verilog for NPC.
+Start `P2-S2: Minimal execution datapath (addi)`:
 
-1. Start `P2-S1: NPC project skeleton and Verilator harness`:
-   - create `npc/` with Verilog RTL, C++ simulator, Makefile/scripts, and tiny tests;
-   - support image loading at a configurable base address;
-   - add cycle/instruction limit, optional waveform switch, and `NPC_RESULT status=...` output;
-   - keep reset PC configurable, defaulting to `0x20000000` per `specs/core.md`;
-   - exit when the simulator builds and a reset/empty-run smoke test is deterministic.
-2. Follow-up Phase 2 sessions:
-   - `P2-S2`: minimal `addi` datapath;
-   - `P2-S3`: `jalr` plus `ebreak` DPI-C trap termination;
-   - `P2-S4`: DPI-C data memory and tiny `lw`/`sw` memory test;
-   - `P2-S5`: concise trace/register-dump debug baseline;
-   - `P2-S6`: early DiffTest against NEMU REF;
-   - `P2-S7`: initial AM `riscv32e-npc` run path;
-   - `P2-S8`: Phase 2 closeout and Phase 3 handoff.
-3. Do not touch `am-kernels/` unless the user explicitly approves fixing its macOS wrapper.
+1. Connect `Ifu.v` to a DPI-C instruction fetch path backed by `Memory`.
+2. Implement enough decode for `addi` and illegal-instruction fallback.
+3. Connect `RegFile.v`, `Idu.v`, `Exu.v`, and writeback through `Core.v`.
+4. Keep x0 immutable and test it.
+5. Add a tiny raw-binary or generated test program for:
+   - `addi x1, x0, imm`
+   - `addi x0, x0, imm` proving x0 remains zero
+6. Add a simulation-side check or concise trace/result mechanism sufficient for the `addi` test.
+7. Re-run `make -C npc smoke` and the new `addi` test.
 
 Relevant files:
 
 - `notes/plan.md`
+- `notes/next.md`
 - `notes/lecture-note-summary.md`
 - `notes/nemu-rv32i-instruction-notes.md`
+- `notes/npc-datapath-and-isa-plan.md`
 - `specs/core.md`
+- `npc/Makefile`
+- `npc/README.md`
+- `npc/rtl/NPC.v`
+- `npc/rtl/core/Core.v`
+- `npc/rtl/core/Idu.v`
+- `npc/rtl/core/RegFile.v`
+- `npc/csrc/main.cpp`
+- `npc/csrc/memory.cpp`
+- `npc/csrc/memory.h`
 - `nemu/.config` (generated/ignored local build config)
 - `nemu/src/filelist.mk`
 - `nemu/src/cpu/difftest/ref.c`
 - `nemu/tools/ref-api-smoke.py`
-- `nemu/Kconfig`
-- `nemu/include/utils.h`
-- `nemu/include/cpu/decode.h`
-- `nemu/src/utils/state.c`
-- `nemu/src/monitor/monitor.c`
-- `nemu/src/monitor/sdb/sdb.c`
-- `nemu/src/cpu/cpu-exec.c`
-- `nemu/src/memory/paddr.c`
-- `nemu/src/isa/riscv32/include/isa-def.h`
 - `nemu/src/isa/riscv32/inst.c`
-- `nemu/src/isa/riscv32/init.c`
-- `nemu/src/isa/riscv32/system/intr.c`
-- `abstract-machine/Makefile`
 - `abstract-machine/scripts/riscv32-nemu.mk`
 - `abstract-machine/scripts/platform/nemu.mk`
-- `abstract-machine/am/include/stdint.h`
-- `abstract-machine/am/include/stddef.h`
-- `abstract-machine/am/include/stdbool.h`
-- `am-kernels/tests/cpu-tests/Makefile`
