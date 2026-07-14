@@ -357,13 +357,13 @@ Sessions:
    - Recorded the exact first failing commands for `hello`, AM timer/devscan tests, and NEMU smoke attempts in `notes/next.md`.
    - Exit status: Phase 3 directed regression and all 35 cpu-tests with DiffTest still pass; NPC `hello` terminates good but prints nothing because `putch()` is empty; AM timer/devscan are bounded failures; NEMU `hello` passes only when overriding the stale `-l` run flag.
 
-2. **P4-S2: NPC ordered UART MMIO and AM `putch()`**
-   - Add NPC simulation UART output at `0x10000000` with byte/word write-mask handling and deterministic ordering.
-   - Update `abstract-machine/am/src/riscv/npc/trm.c` `putch()` to write to the UART MMIO address.
-   - Keep normal output plain enough for workload logs, but make the harness still emit final `NPC_RESULT` status lines.
-   - Run `am-kernels/kernels/hello` or the smallest available hello-style AM workload with `ARCH=riscv32e-npc`.
-   - Re-run the Phase 3 cpu-tests smoke subset to ensure UART changes did not perturb normal memory behavior.
-   - Exit when `hello` visibly prints through NPC UART and terminates by retired-`ebreak` detection with a good result.
+2. **P4-S2: NPC ordered UART MMIO and AM `putch()`** — completed
+   - Added NPC simulation UART output at `0x10000000`; writes are captured from retired store metadata and emitted by the C++ harness after the instruction commits, avoiding combinational DPI side effects.
+   - Updated `abstract-machine/am/src/riscv/npc/trm.c` `putch()` to write to the UART MMIO address.
+   - Updated NPC AM IOE UART config/TX so `AM_UART_CONFIG` reports present and `AM_UART_TX` calls `putch()`.
+   - Validated `am-kernels/kernels/hello` on `ARCH=riscv32e-npc`: it visibly prints `Hello, AbstractMachine!` and ends with a good `NPC_RESULT`.
+   - Re-ran the NPC directed regression and full 35-test cpu-tests sweep with NEMU event DiffTest; all passed.
+   - Exit status: P4-S2 is complete; `am-tests mainargs=d` now prints through UART but remains bounded by the still-stubbed timer, which is the next P4-S3 task.
 
 3. **P4-S3: Temporary retired-instruction timer and AM IOE timer**
    - Implement the Phase 4 simulation timer model needed now: expose `mtime`/`mtimeh` through the CLINT MMIO addresses used by AM, but advance the value deterministically by retired-instruction count rather than by physical core cycles.

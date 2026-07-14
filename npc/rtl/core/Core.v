@@ -25,7 +25,11 @@ module Core #(
   output [4:0]  commit_rd,
   output [31:0] commit_wdata,
   output        commit_exception,
-  output [31:0] commit_cause
+  output [31:0] commit_cause,
+  output        commit_mem_wen,
+  output [31:0] commit_mem_addr,
+  output [31:0] commit_mem_wdata,
+  output [3:0]  commit_mem_wmask
 );
 
   wire [31:0] reset_vector = (reset_pc == 32'd0) ? RESET_PC : reset_pc;
@@ -75,6 +79,9 @@ module Core #(
   wire [31:0] alu_result;
   wire [31:0] lsu_addr;
   wire [31:0] lsu_rdata;
+  wire [31:0] lsu_write_addr;
+  wire [31:0] lsu_write_data;
+  wire [3:0]  lsu_write_mask;
   wire [31:0] csr_rdata;
   wire [31:0] mtvec;
   wire [31:0] mepc;
@@ -165,6 +172,10 @@ module Core #(
   assign commit_wdata = final_wb_data;
   assign commit_exception = bad_without_vector;
   assign commit_cause = exception_cause;
+  assign commit_mem_wen = !reset && !halted && lsu_wen;
+  assign commit_mem_addr = lsu_write_addr;
+  assign commit_mem_wdata = lsu_write_data;
+  assign commit_mem_wmask = lsu_write_mask;
 
   Ifu u_ifu (
     .pc(fetch_pc),
@@ -235,7 +246,10 @@ module Core #(
     .load_unsigned(mem_unsigned),
     .addr(lsu_addr),
     .wdata(rs2_data),
-    .rdata(lsu_rdata)
+    .rdata(lsu_rdata),
+    .write_addr(lsu_write_addr),
+    .write_data(lsu_write_data),
+    .write_mask(lsu_write_mask)
   );
 
   Csr u_csr (

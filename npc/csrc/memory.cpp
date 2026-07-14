@@ -4,6 +4,7 @@
 #include <cstring>
 
 namespace {
+constexpr uint32_t UART_BASE = 0x10000000u;
 Memory *pmem = nullptr;
 }
 
@@ -88,6 +89,12 @@ uint32_t Memory::read32(uint32_t addr) const {
 }
 
 void Memory::write32(uint32_t addr, uint32_t data, uint8_t wmask) {
+  if (addr == UART_BASE) {
+    if (trace_) {
+      std::printf("NPC_MMIO w addr=0x%08x data=0x%08x mask=0x%x\n", addr, data, wmask & 0xf);
+    }
+    return;
+  }
   if (!contains(addr, 4)) {
     std::fprintf(stderr, "pmem write out of bounds: addr=0x%08x data=0x%08x mask=0x%x\n", addr, data, wmask & 0xf);
     return;
@@ -101,6 +108,13 @@ void Memory::write32(uint32_t addr, uint32_t data, uint8_t wmask) {
   }
   if (trace_) {
     std::printf("NPC_MEM w addr=0x%08x data=0x%08x mask=0x%x\n", addr, data, wmask & 0xf);
+  }
+}
+
+void Memory::commit_mmio_write(uint32_t addr, uint32_t data, uint8_t wmask) {
+  if (addr == UART_BASE && (wmask & 0x1) != 0) {
+    std::putchar(static_cast<unsigned char>(data & 0xff));
+    std::fflush(stdout);
   }
 }
 

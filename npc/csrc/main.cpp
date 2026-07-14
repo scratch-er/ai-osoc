@@ -152,10 +152,17 @@ public:
       if (!top_.commit_valid) return {"bad", "no_commit"};
 
       CommitEvent ev = make_event();
+      bool commit_mem_wen = top_.commit_mem_wen;
+      uint32_t commit_mem_addr = top_.commit_mem_addr;
+      uint32_t commit_mem_wdata = top_.commit_mem_wdata;
+      uint8_t commit_mem_wmask = static_cast<uint8_t>(top_.commit_mem_wmask & 0xf);
       eval_cycle();
       cycles_++;
       ring_.push(ev);
       retire_++;
+      if (commit_mem_wen) {
+        memory_.commit_mmio_write(commit_mem_addr, commit_mem_wdata, commit_mem_wmask);
+      }
 
       if (log_level_ >= 1 || trace_on_) {
         char buf[160];

@@ -17,6 +17,7 @@ public:
   void copy_to(void *dst, uint32_t addr, uint32_t len) const;
   uint32_t read32(uint32_t addr) const;
   void write32(uint32_t addr, uint32_t data, uint8_t wmask = 0xf);
+  void commit_mmio_write(uint32_t addr, uint32_t data, uint8_t wmask);
 
 private:
   uint32_t base_addr_;

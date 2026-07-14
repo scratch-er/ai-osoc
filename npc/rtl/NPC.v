@@ -26,7 +26,11 @@ module NPC #(
   output [4:0]  commit_rd,
   output [31:0] commit_wdata,
   output        commit_exception,
-  output [31:0] commit_cause
+  output [31:0] commit_cause,
+  output        commit_mem_wen,
+  output [31:0] commit_mem_addr,
+  output [31:0] commit_mem_wdata,
+  output [3:0]  commit_mem_wmask
 );
 
   wire unused_interrupt = io_interrupt;
@@ -56,7 +60,11 @@ module NPC #(
     .commit_rd(commit_rd),
     .commit_wdata(commit_wdata),
     .commit_exception(commit_exception),
-    .commit_cause(commit_cause)
+    .commit_cause(commit_cause),
+    .commit_mem_wen(commit_mem_wen),
+    .commit_mem_addr(commit_mem_addr),
+    .commit_mem_wdata(commit_mem_wdata),
+    .commit_mem_wmask(commit_mem_wmask)
   );
 
 endmodule

@@ -7,7 +7,10 @@ module Lsu (
   input         load_unsigned,
   input  [31:0] addr,
   input  [31:0] wdata,
-  output [31:0] rdata
+  output [31:0] rdata,
+  output [31:0] write_addr,
+  output [31:0] write_data,
+  output [3:0]  write_mask
 );
 
   wire [31:0] aligned_addr = {addr[31:2], 2'b00};
@@ -29,6 +32,9 @@ module Lsu (
   assign raw_rdata = ren ? pmem_read(aligned_addr) : 32'd0;
   assign rdata = (size == `NPC_MEM_BYTE) ? (load_unsigned ? {24'd0, load_byte} : {{24{load_byte[7]}}, load_byte}) :
                  (size == `NPC_MEM_HALF) ? (load_unsigned ? {16'd0, load_half} : {{16{load_half[15]}}, load_half}) : raw_rdata;
+  assign write_addr = aligned_addr;
+  assign write_data = store_wdata;
+  assign write_mask = wmask;
 
   always @(*) begin
     if (wen) begin
