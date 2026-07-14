@@ -229,12 +229,11 @@ Sessions:
    - Keep passing output concise and dump bounded recent events/registers on failure.
    - Exit when NEMU script mode, NPC shell runs, and event-based DiffTest tiny tests pass.
 
-8. **P2-S7: Minimal AM `riscv32e-npc` run path**
-   - Inspect existing AM support and add only the missing pieces needed for one-command NPC runs.
-   - Provide a `run` target for `ARCH=riscv32e-npc` that invokes the NPC simulator with the built image and a limit.
-   - Implement or adjust AM `halt()` for NPC so it uses `ebreak` and passes the result code to the harness.
-   - Start with `dummy`; do not broaden to all cpu-tests in this phase unless the tiny core already supports the required instructions.
-   - Exit when an AM `dummy`-style workload can be built and run on NPC with automatic GOOD/BAD reporting, or when the remaining blocker is narrowed to missing Phase 3 ISA coverage.
+8. **P2-S7: Minimal AM `riscv32e-npc` run path** — completed
+   - Added the missing one-command NPC run path in `abstract-machine/scripts/platform/npc.mk`.
+   - Implemented NPC AM `halt()` with `ebreak`, passing the result code through `a0` for the current harness convention.
+   - Added `jal` to the tiny NPC subset because AM startup uses it before reaching `_trm_init()`/`halt()`.
+   - Validated AM `dummy` through `ARCH=riscv32e-npc`; broader cpu-tests remain Phase 3 work because the RTL intentionally supports only a small instruction subset.
 
 9. **P2-S8: Phase 2 closeout and Phase 3 handoff**
    - Re-run all Phase 2 checks: harness smoke, `addi`, control-flow/trap, memory test, DiffTest tiny tests, and AM `dummy` if available.

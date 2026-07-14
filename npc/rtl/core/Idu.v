@@ -9,11 +9,13 @@ module Idu (
   output [31:0] imm_i,
   output [31:0] imm_s,
   output [31:0] imm_u,
+  output [31:0] imm_j,
   output        is_addi,
   output        is_auipc,
   output        is_lw,
   output        is_sw,
   output        is_jalr,
+  output        is_jal,
   output        is_ebreak,
   output        is_legal
 );
@@ -27,13 +29,15 @@ module Idu (
   assign imm_i  = {{20{inst[31]}}, inst[31:20]};
   assign imm_s  = {{20{inst[31]}}, inst[31:25], inst[11:7]};
   assign imm_u  = {inst[31:12], 12'b0};
+  assign imm_j  = {{12{inst[31]}}, inst[19:12], inst[20], inst[30:21], 1'b0};
 
   assign is_addi   = opcode == 7'b0010011 && funct3 == 3'b000;
   assign is_auipc  = opcode == 7'b0010111;
   assign is_lw     = opcode == 7'b0000011 && funct3 == 3'b010;
   assign is_sw     = opcode == 7'b0100011 && funct3 == 3'b010;
   assign is_jalr   = opcode == 7'b1100111 && funct3 == 3'b000;
+  assign is_jal    = opcode == 7'b1101111;
   assign is_ebreak = inst == 32'h0010_0073;
-  assign is_legal  = is_addi || is_auipc || is_lw || is_sw || is_jalr || is_ebreak;
+  assign is_legal  = is_addi || is_auipc || is_lw || is_sw || is_jalr || is_jal || is_ebreak;
 
 endmodule

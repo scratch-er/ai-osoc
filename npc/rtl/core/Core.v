@@ -41,11 +41,13 @@ module Core #(
   wire [31:0] imm_i;
   wire [31:0] imm_s;
   wire [31:0] imm_u;
+  wire [31:0] imm_j;
   wire        is_addi;
   wire        is_auipc;
   wire        is_lw;
   wire        is_sw;
   wire        is_jalr;
+  wire        is_jal;
   wire        is_ebreak;
   wire        is_legal;
   wire [31:0] rs1_data;
@@ -57,18 +59,20 @@ module Core #(
   wire        rd_is_rv32e = rd[4] == 1'b0;
   wire        rs1_is_rv32e = rs1[4] == 1'b0;
   wire        rs2_is_rv32e = rs2[4] == 1'b0;
-  wire        writes_rd = is_addi || is_auipc || is_lw || is_jalr;
+  wire        writes_rd = is_addi || is_auipc || is_lw || is_jalr || is_jal;
+  wire        reads_rs1 = is_addi || is_lw || is_sw || is_jalr;
   wire        reads_rs2 = is_sw;
   wire        rd_valid = !writes_rd || rd_is_rv32e;
-  wire        rs1_valid = (is_ebreak || rs1_is_rv32e);
+  wire        rs1_valid = !reads_rs1 || rs1_is_rv32e;
   wire        rs2_valid = !reads_rs2 || rs2_is_rv32e;
   wire        legal_inst = is_legal && rd_valid && rs1_valid && rs2_valid;
   wire        wb_wen = legal_inst && writes_rd;
   wire        lsu_wen = legal_inst && is_sw;
   wire [31:0] pc_plus_4 = pc + 32'd4;
   wire [31:0] jalr_target = (rs1_data + imm_i) & ~32'd1;
-  wire [31:0] next_pc = is_jalr ? jalr_target : pc_plus_4;
-  wire [31:0] final_wb_data = is_jalr ? pc_plus_4 : wb_data;
+  wire [31:0] jal_target = pc + imm_j;
+  wire [31:0] next_pc = is_jalr ? jalr_target : (is_jal ? jal_target : pc_plus_4);
+  wire [31:0] final_wb_data = (is_jalr || is_jal) ? pc_plus_4 : wb_data;
   wire [1:0]  ebreak_status = (debug_a0 == 32'd0) ? `NPC_STATUS_GOOD : `NPC_STATUS_BAD;
   wire        unused = |{opcode, funct3, funct7};
 
@@ -104,11 +108,13 @@ module Core #(
     .imm_i(imm_i),
     .imm_s(imm_s),
     .imm_u(imm_u),
+    .imm_j(imm_j),
     .is_addi(is_addi),
     .is_auipc(is_auipc),
     .is_lw(is_lw),
     .is_sw(is_sw),
     .is_jalr(is_jalr),
+    .is_jal(is_jal),
     .is_ebreak(is_ebreak),
     .is_legal(is_legal)
   );

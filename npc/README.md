@@ -2,7 +2,7 @@
 
 Initial Verilog NPC project for the RV32E_Zicsr core.
 
-Current status: Phase 2 is complete through `P2-S6.5: CommitEvent-based control/debug interface`. The RTL fetches instructions through DPI-C memory, executes RV32E `addi`, `auipc`, aligned `lw`/`sw`, and `jalr`, keeps `x0` immutable, and terminates on `ebreak` with GOOD/BAD status from `a0` (`x10 == 0` means GOOD). Unsupported instructions halt with BAD status.
+Current status: Phase 2 is complete through `P2-S7: Minimal AM riscv32e-npc run path`. The RTL fetches instructions through DPI-C memory, executes RV32E `addi`, `auipc`, `jal`, `jalr`, aligned `lw`/`sw`, keeps `x0` immutable, and terminates on `ebreak` with GOOD/BAD status from `a0` (`x10 == 0` means GOOD). Unsupported instructions halt with BAD status.
 
 The C++ Verilator harness now centers debugging around retired-instruction `CommitEvent`s. It has a scriptable command shell, bounded `last [n]` history, stable `NPC_RESULT` lines, and event-sequence DiffTest against the NEMU REF shared object when the REF exports `difftest_step_event()`.
 
@@ -36,6 +36,15 @@ Run with an optional image, reset PC, cycle limit, optional x1 check, and option
 ```sh
 make -C npc run ARGS="--image path/to/image.bin --reset-pc 0x80000000 --max-cycles 100 --expect-x1 0x5 --difftest-ref ../nemu/build/riscv32-nemu-interpreter-so"
 ```
+
+Run the minimal AM `dummy` workload through `ARCH=riscv32e-npc`:
+
+```sh
+make -f /tmp/am-dummy.mk ARCH=riscv32e-npc \
+  AM_HOME=/path/to/abstract-machine CROSS_COMPILE=riscv64-elf- run
+```
+
+`abstract-machine/scripts/platform/npc.mk` builds `npc/build/npc` automatically and runs it with `--reset-pc 0x80000000`. Override `NPC_HOME`, `NPC_SIM`, `NPC_RESET_PC`, or `NPC_MAX_CYCLES` if needed.
 
 ## Scriptable Shell
 

@@ -17,15 +17,23 @@ MAINARGS_MAX_LEN = 64
 MAINARGS_PLACEHOLDER = the_insert-arg_rule_in_Makefile_will_insert_mainargs_here
 CFLAGS += -DMAINARGS_MAX_LEN=$(MAINARGS_MAX_LEN) -DMAINARGS_PLACEHOLDER=$(MAINARGS_PLACEHOLDER)
 
+PYTHON ?= python3
+
 insert-arg: image
-	@python $(AM_HOME)/tools/insert-arg.py $(IMAGE).bin $(MAINARGS_MAX_LEN) $(MAINARGS_PLACEHOLDER) "$(mainargs)"
+	@$(PYTHON) $(AM_HOME)/tools/insert-arg.py $(IMAGE).bin $(MAINARGS_MAX_LEN) $(MAINARGS_PLACEHOLDER) "$(mainargs)"
 
 image: image-dep
 	@$(OBJDUMP) -d $(IMAGE).elf > $(IMAGE).txt
 	@echo + OBJCOPY "->" $(IMAGE_REL).bin
 	@$(OBJCOPY) -S --set-section-flags .bss=alloc,contents -O binary $(IMAGE).elf $(IMAGE).bin
 
+NPC_HOME ?= $(abspath $(AM_HOME)/../npc)
+NPC_SIM ?= $(NPC_HOME)/build/npc
+NPC_RESET_PC ?= 0x80000000
+NPC_MAX_CYCLES ?= 100000
+
 run: insert-arg
-	echo "TODO: add command here to run simulation"
+	@$(MAKE) -s -C $(NPC_HOME)
+	@$(NPC_SIM) --image $(IMAGE).bin --reset-pc $(NPC_RESET_PC) --max-cycles $(NPC_MAX_CYCLES)
 
 .PHONY: insert-arg

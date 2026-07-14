@@ -3,7 +3,7 @@
 Current state:
 
 - Phase 1 (`NEMU and AM Foundation`) is closed through Session 8.
-- Phase 2 has started and is complete through the inserted `P2-S6.5: CommitEvent-based control/debug interface`.
+- Phase 2 is complete through `P2-S7: Minimal AM riscv32e-npc run path`.
 - NPC implementation style is **Verilog**.
 - Repository status before Phase 2 already had untracked `.DS_Store` and `activate`; leave them alone unless the user explicitly asks.
 
@@ -69,36 +69,25 @@ Phase 2 completed work:
     - `npc/tests/bin/difftest-jalr-ebreak.bin`
     - `npc/tests/bin/difftest-lw-sw.bin`
   - Added `make -C npc test-difftest`, using `REF_SO ?= ../nemu/build/riscv32-nemu-interpreter-so`.
-
-Inserted P2-S6.5 completed work:
-
-- Added shared C-compatible `CommitEvent` format and helpers in `nemu/include/debug/commit_event.h`.
-- NEMU native now records a fixed 64-entry `CommitEvent` ring in `nemu/src/utils/state.c`.
-- NEMU monitor was refactored into a scriptable command dispatcher while preserving interactive mode and old aliases:
-  - new CLI: `-e/--exec 'cmd; cmd'`, `-f/--script FILE`
-  - commands: `run`, `step`/`si`, `print pc`, `print reg [i]`, `print mem <addr> <size>`, `dump state`, `last [n]`, `break`, `delete-break`, `clear-breaks`, `list-breaks`, `exit`/`quit`/`q`
-- NEMU REF shared object now exports event APIs:
-  - `difftest_step_event(CommitEvent *ev)`
-  - `difftest_get_last_events(CommitEvent *buf, size_t max_n)`
-- NPC RTL now exposes commit/debug signals from `NPC.v`/`Core.v`:
-  - commit valid, PC, instruction, next PC, writeback enable/register/value, exception flag/cause.
-- NPC C++ harness now has a scriptable shell:
-  - `-e 'load ...; reset; run ...; dump state; last ...; exit'`
-  - `-f script-file`
-  - commands: `load`, `load_bin`, `reset`, `step`, `run`, `run to`, `run until reg`, `print`, `dump state`, `last`, `break`, `delete-break`, `clear-breaks`, `list-breaks`, `log`, `trace`, `exit`.
-- NPC uses a configurable `CommitEvent` ring (`--ring-size`, default 64). Failure dumps print `NPC_LAST_BEGIN/END` bounded event history plus `NPC_REGS`.
-- NEMU and NPC now both support small fixed-size PC breakpoint tables through `break`, `delete-break`, `clear-breaks`, and `list-breaks`; run loops only scan the table when breakpoints are present.
-- NPC DiffTest now prefers the REF event API and compares CommitEvent sequence fields (`pc`, `inst`, `next_pc`, exception/cause, writeback register/value). Full register checks remain fallback/diagnostic context.
-- `npc/Makefile` tests were updated for new result lines with `reason=...` and `insts=...`.
-- Removed stale NEMU debug/tracing code after confirming it was superseded by CommitEvent history:
-  - removed Kconfig `TRACE`/`ITRACE`/`IQUEUE`/`MTRACE` options;
-  - removed old disassembly-backed instruction queue and memory trace hooks;
-  - removed unused PA-style expression/watchpoint source files from `nemu/src/monitor/sdb/`;
-  - removed the stale `--log` file option and default `nemu-log.txt` run argument.
-- Updated documentation:
-  - `nemu/README.md`
-  - `npc/README.md`
-  - `notes/plan.md`
+- P2-S6.5 CommitEvent-based control/debug interface:
+  - Added shared C-compatible `CommitEvent` format and helpers in `nemu/include/debug/commit_event.h`.
+  - NEMU native records a fixed 64-entry `CommitEvent` ring in `nemu/src/utils/state.c`.
+  - NEMU monitor has scriptable `-e/--exec` and `-f/--script` command dispatch while preserving interactive mode and old aliases.
+  - NEMU REF shared object exports `difftest_step_event()` and `difftest_get_last_events()`.
+  - NPC RTL exposes commit/debug signals from `NPC.v`/`Core.v`.
+  - NPC C++ harness has a scriptable shell with `load`, `reset`, `step`, `run`, `run to`, `run until reg`, `print`, `dump state`, `last`, breakpoint commands, `log`, `trace`, and `exit`.
+  - NPC uses a configurable `CommitEvent` ring (`--ring-size`, default 64). Failure dumps print `NPC_LAST_BEGIN/END` bounded event history plus `NPC_REGS`.
+  - NEMU and NPC both support small fixed-size PC breakpoint tables.
+  - NPC DiffTest prefers the REF event API and compares CommitEvent sequence fields.
+  - Removed stale NEMU debug/tracing code superseded by CommitEvent history.
+  - Updated `nemu/README.md`, `npc/README.md`, and `notes/plan.md`.
+- P2-S7 minimal AM `riscv32e-npc` run path:
+  - Completed `abstract-machine/scripts/platform/npc.mk` `run` target.
+  - Added `PYTHON ?= python3` for `insert-arg` on this macOS environment.
+  - `run` now builds `npc/build/npc` through `NPC_HOME ?= $(abspath $(AM_HOME)/../npc)` and invokes it with `--image $(IMAGE).bin --reset-pc 0x80000000 --max-cycles 100000` by default.
+  - Implemented `abstract-machine/am/src/riscv/npc/trm.c::halt()` as `mv a0, code; ebreak`, with a fallback infinite loop.
+  - Added minimal `jal` support to NPC (`Idu.v` J immediate/decode and `Core.v` next-PC/link writeback) because AM startup uses `jal` to call `_trm_init()`.
+  - Updated `npc/README.md` and `notes/plan.md`.
 
 Validated commands and current results:
 
@@ -110,33 +99,36 @@ Validated commands and current results:
 
    Result: passed.
 
-2. NEMU native script-mode smoke:
+2. AM `dummy` through NPC:
+
+   ```sh
+   tmp=$(mktemp /tmp/am-dummy.XXXXXX.mk) && \
+   printf 'NAME = dummy\nSRCS = /Users/venti/Workspace/ai-ysyx/am-kernels/tests/cpu-tests/tests/dummy.c\ninclude /Users/venti/Workspace/ai-ysyx/abstract-machine/Makefile\n' > "$tmp" && \
+   make -f "$tmp" ARCH=riscv32e-npc AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine CROSS_COMPILE=riscv64-elf- run; \
+   status=$?; rm -f "$tmp"; exit $status
+   ```
+
+   Result: passed with `NPC_RESULT status=good reason=good_trap cycles=13 insts=13 pc=0x80000030 ... a0=0x00000000 trap=1`.
+
+3. NEMU native script-mode smoke from P2-S6.5 remains:
 
    ```sh
    cd nemu && ./build/riscv32-nemu-interpreter -e 'step 1; last 1; print pc; exit'
    ```
 
-   Result: passed; prints one `NEMU_LAST` CommitEvent and `pc = 0x80000004`.
+   Last known result: passed; prints one `NEMU_LAST` CommitEvent and `pc = 0x80000004`.
 
-3. NEMU REF API smoke:
+4. NEMU REF API smoke from P2-S6.5 remains:
 
    ```sh
    cd nemu && python3 tools/ref-api-smoke.py build/riscv32-nemu-interpreter-so --reset-vector 0x80000000
    ```
 
-   Result: `REF_API_SMOKE status=pass pc=0x80000004 x0=0x00000000 t0=0x80000000 mem_addr=0x80000100`.
-
-4. NPC script-shell example:
-
-   ```sh
-   npc/build/npc --reset-pc 0x100 --max-cycles 16 -e 'load npc/tests/bin/jalr-ebreak.bin 0x100; reset; run 2; dump state; last 2; exit'
-   ```
-
-   Result: stops after 2 retired instructions, prints `NPC_STATE pc=0x00000118 cycles=2 retired=2 halted=0 trap=0` and two `NPC_LAST` events.
+   Last known result: `REF_API_SMOKE status=pass pc=0x80000004 x0=0x00000000 t0=0x80000000 mem_addr=0x80000100`.
 
 Known caveats:
 
-- NPC currently executes only `addi`, `auipc`, aligned `lw`, aligned `sw`, `jalr`, and `ebreak`; all other instructions halt as BAD unsupported/illegal instructions.
+- NPC currently executes only `addi`, `auipc`, `jal`, `jalr`, aligned `lw`, aligned `sw`, and `ebreak`; all other instructions halt as BAD unsupported/illegal instructions.
 - Memory access remains an early aligned 32-bit happy path. Misalignment, access faults, byte/halfword loads/stores, and byte masks remain later work.
 - NPC CommitEvent currently does not carry memory access info; `--mem-trace` still prints immediate memory read/write lines.
 - NEMU CommitEvent writeback inference is opcode-based and adequate for the current tiny RV32I subset; it should be refined when CSR/trap behavior becomes central in Phase 3.
@@ -147,22 +139,20 @@ Known caveats:
 - `debug_x1`, `debug_a0`, `debug_trap_status`, `debug_inst`, and `debug_regs_flat` remain temporary harness-visible check signals, now supplemented by explicit commit signals.
 - All current `npc/tests/bin/*.bin` files are raw binaries, not hex text parser inputs.
 - Verilator build output is still verbose on clean builds.
-- The `am-kernels/tests/cpu-tests` wrapper command still fails on macOS because its generated makefile path uses `/bin/echo -e`; use the temporary `printf` loop from earlier sessions unless changing `am-kernels/` is explicitly allowed.
-- `hello-str` reaches serial output but still fails in `abstract-machine/klib/src/stdio.c:17` because klib `printf` is not implemented. Leave this for a later klib/runtime session unless needed immediately.
+- The `am-kernels/tests/cpu-tests` wrapper command still fails on macOS because its generated makefile path uses `/bin/echo -e`; use a temporary Makefile/`printf` workaround unless changing `am-kernels/` is explicitly allowed.
+- `hello-str` reaches serial output on NEMU but still fails in `abstract-machine/klib/src/stdio.c:17` because klib `printf` is not implemented. Leave this for a later klib/runtime session unless needed immediately.
 - M-extension tests remain out of scope because the target core is RV32E_Zicsr.
 - `abstract-machine/scripts/riscv32-nemu.mk` still defaults `CROSS_COMPILE := riscv64-linux-gnu-`; continue passing `CROSS_COMPILE=riscv64-elf-` unless the toolchain/default is changed.
 - Devices remain disabled; the minimal serial fallback is intentionally not a full device model.
 
 Next work:
 
-Start `P2-S7: Minimal AM riscv32e-npc run path`:
+Start `P2-S8: Phase 2 closeout and Phase 3 handoff`:
 
-1. Inspect current AM target/platform support under `abstract-machine/scripts/` and `abstract-machine/am/src/` for how to add a `riscv32e-npc` target with minimal churn.
-2. Add only the missing run-path pieces needed to build and run a tiny AM workload on NPC.
-3. Make AM `halt()` for NPC use `ebreak` and pass result code through `a0` for the current harness convention.
-4. Provide a one-command `make ... ARCH=riscv32e-npc run` path that invokes `npc/build/npc` with image, reset PC, and cycle/instruction limit.
-5. Start with `dummy`; do not broaden to cpu-tests until Phase 3 instruction coverage exists.
-6. Re-run the full current NPC regression command and any new AM/NPC command.
+1. Re-run all Phase 2 checks, including NPC regression and AM `dummy` through `ARCH=riscv32e-npc`.
+2. Decide the first Phase 3 RV32E instruction group from the AM dummy binary and likely cpu-test startup needs; likely start with direct calls/returns and integer immediates/loads/stores beyond the tiny subset.
+3. Update `notes/next.md` with exact closeout commands and first Phase 3 task.
+4. Do not broaden to all cpu-tests until Phase 3 instruction coverage is intentionally underway.
 
 Relevant files:
 
@@ -172,9 +162,12 @@ Relevant files:
 - `notes/nemu-rv32i-instruction-notes.md`
 - `notes/npc-datapath-and-isa-plan.md`
 - `specs/core.md`
+- `specs/abstract-machine/README.md`
+- `specs/abstract-machine/specifications.md`
+- `specs/lecture-notes/02_C阶段讲义/02_C2.md`
+- `specs/lecture-notes/05_D阶段讲义/04_D4.md`
 - `nemu/README.md`
 - `nemu/include/debug/commit_event.h`
-- `nemu/include/utils.h`
 - `nemu/src/cpu/cpu-exec.c`
 - `nemu/src/cpu/difftest/ref.c`
 - `nemu/src/monitor/monitor.c`
@@ -186,6 +179,7 @@ Relevant files:
 - `npc/README.md`
 - `npc/rtl/NPC.v`
 - `npc/rtl/core/Core.v`
+- `npc/rtl/core/Idu.v`
 - `npc/csrc/main.cpp`
 - `npc/csrc/memory.cpp`
 - `npc/csrc/memory.h`
@@ -199,5 +193,6 @@ Relevant files:
 - `npc/tests/bin/auipc-ebreak.bin`
 - `npc/tests/bin/difftest-jalr-ebreak.bin`
 - `npc/tests/bin/difftest-lw-sw.bin`
-- `abstract-machine/scripts/riscv32-nemu.mk`
-- `abstract-machine/scripts/platform/nemu.mk`
+- `abstract-machine/scripts/riscv32e-npc.mk`
+- `abstract-machine/scripts/platform/npc.mk`
+- `abstract-machine/am/src/riscv/npc/trm.c`
