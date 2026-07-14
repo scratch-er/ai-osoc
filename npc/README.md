@@ -2,7 +2,7 @@
 
 Initial Verilog NPC project for the RV32E_Zicsr core.
 
-Current status: P2-S3 control-flow/trap slice. The RTL fetches instructions through DPI-C memory, executes RV32E `addi` and `jalr`, keeps `x0` immutable, and terminates on `ebreak` with GOOD/BAD status from `a0` (`x10 == 0` means GOOD). Unsupported instructions halt with BAD status.
+Current status: P2-S4 DPI-C data memory slice. The RTL fetches instructions through DPI-C memory, executes RV32E `addi`, aligned `lw`/`sw`, and `jalr`, keeps `x0` immutable, and terminates on `ebreak` with GOOD/BAD status from `a0` (`x10 == 0` means GOOD). Unsupported instructions halt with BAD status.
 
 ## Commands
 
@@ -28,6 +28,12 @@ Run the `jalr`/`ebreak` termination regression:
 
 ```sh
 make -C npc test-jalr-ebreak
+```
+
+Run the aligned `lw`/`sw` data-memory regression:
+
+```sh
+make -C npc test-lw-sw
 ```
 
 Run with an optional image, reset PC, cycle limit, and optional x1 check:

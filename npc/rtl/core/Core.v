@@ -28,27 +28,36 @@ module Core #(
   wire [4:0]  rs2;
   wire [6:0]  funct7;
   wire [31:0] imm_i;
+  wire [31:0] imm_s;
   wire        is_addi;
+  wire        is_lw;
+  wire        is_sw;
   wire        is_jalr;
   wire        is_ebreak;
   wire        is_legal;
   wire [31:0] rs1_data;
   wire [31:0] rs2_data;
   wire [31:0] alu_result;
+  wire [31:0] lsu_addr;
+  wire [31:0] lsu_rdata;
   wire [31:0] wb_data;
   wire        rd_is_rv32e = rd[4] == 1'b0;
   wire        rs1_is_rv32e = rs1[4] == 1'b0;
-  wire        writes_rd = is_addi || is_jalr;
+  wire        rs2_is_rv32e = rs2[4] == 1'b0;
+  wire        writes_rd = is_addi || is_lw || is_jalr;
+  wire        reads_rs2 = is_sw;
   wire        rd_valid = !writes_rd || rd_is_rv32e;
   wire        rs1_valid = (is_ebreak || rs1_is_rv32e);
-  wire        legal_inst = is_legal && rd_valid && rs1_valid;
+  wire        rs2_valid = !reads_rs2 || rs2_is_rv32e;
+  wire        legal_inst = is_legal && rd_valid && rs1_valid && rs2_valid;
   wire        wb_wen = legal_inst && writes_rd;
+  wire        lsu_wen = legal_inst && is_sw;
   wire [31:0] pc_plus_4 = pc + 32'd4;
   wire [31:0] jalr_target = (rs1_data + imm_i) & ~32'd1;
   wire [31:0] next_pc = is_jalr ? jalr_target : pc_plus_4;
   wire [31:0] final_wb_data = is_jalr ? pc_plus_4 : wb_data;
   wire [1:0]  ebreak_status = (debug_a0 == 32'd0) ? `NPC_STATUS_GOOD : `NPC_STATUS_BAD;
-  wire        unused = |{opcode, funct3, rs2, funct7, rs2_data, alu_result};
+  wire        unused = |{opcode, funct3, funct7};
 
   import "DPI-C" function void npc_trap(input int code);
 
@@ -70,7 +79,10 @@ module Core #(
     .rs2(rs2),
     .funct7(funct7),
     .imm_i(imm_i),
+    .imm_s(imm_s),
     .is_addi(is_addi),
+    .is_lw(is_lw),
+    .is_sw(is_sw),
     .is_jalr(is_jalr),
     .is_ebreak(is_ebreak),
     .is_legal(is_legal)
@@ -96,8 +108,18 @@ module Core #(
     .add_result(alu_result)
   );
 
+  assign lsu_addr = rs1_data + (is_sw ? imm_s : imm_i);
+
+  Lsu u_lsu (
+    .ren(!reset && !halted && legal_inst && is_lw),
+    .wen(!reset && !halted && lsu_wen),
+    .addr(lsu_addr),
+    .wdata(rs2_data),
+    .rdata(lsu_rdata)
+  );
+
   Wbu u_wbu (
-    .alu_result(alu_result),
+    .alu_result(is_lw ? lsu_rdata : alu_result),
     .wdata(wb_data)
   );
 

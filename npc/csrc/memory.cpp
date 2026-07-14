@@ -66,6 +66,19 @@ uint32_t Memory::read32(uint32_t addr) const {
          (static_cast<uint32_t>(data_[off + 3]) << 24);
 }
 
+void Memory::write32(uint32_t addr, uint32_t data) {
+  if (!contains(addr, 4)) {
+    std::fprintf(stderr, "pmem write out of bounds: addr=0x%08x data=0x%08x\n", addr, data);
+    return;
+  }
+
+  uint32_t off = addr - base_addr_;
+  data_[off] = static_cast<uint8_t>(data);
+  data_[off + 1] = static_cast<uint8_t>(data >> 8);
+  data_[off + 2] = static_cast<uint8_t>(data >> 16);
+  data_[off + 3] = static_cast<uint8_t>(data >> 24);
+}
+
 void set_pmem(Memory *memory) {
   pmem = memory;
 }
@@ -76,4 +89,12 @@ extern "C" uint32_t pmem_read(uint32_t addr) {
     return 0;
   }
   return pmem->read32(addr);
+}
+
+extern "C" void pmem_write(uint32_t addr, uint32_t data) {
+  if (pmem == nullptr) {
+    std::fprintf(stderr, "pmem_write called before memory is initialized\n");
+    return;
+  }
+  pmem->write32(addr, data);
 }

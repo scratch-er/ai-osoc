@@ -14,7 +14,7 @@ ifeq ($(TRACE),1)
 VERILATOR_FLAGS += --trace
 endif
 
-.PHONY: all run smoke test-addi test-jalr-ebreak clean
+.PHONY: all run smoke test-addi test-jalr-ebreak test-lw-sw clean
 
 all: $(BIN)
 
@@ -42,6 +42,13 @@ test-jalr-ebreak: $(BIN)
 	printf '%s\n' "$$out" | grep 'NPC_TRAP code=1' >/dev/null; \
 	printf '%s\n' "$$out" | grep 'NPC_CHECK x1=0x00000102 expect=0x00000102 PASS' >/dev/null; \
 	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good cycles=5 pc=0x00000120 halted=1 limit=16 x1=0x00000102 a0=0x00000000 trap=1' >/dev/null
+
+test-lw-sw: $(BIN)
+	@out="$$($(BIN) --image tests/bin/lw-sw.bin --reset-pc 0x100 --max-cycles 16 --expect-x1 0x2a 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_TRAP code=1' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_CHECK x1=0x0000002a expect=0x0000002a PASS' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good cycles=5 pc=0x00000110 halted=1 limit=16 x1=0x0000002a a0=0x00000000 trap=1' >/dev/null
 
 clean:
 	rm -rf $(BUILD_DIR)
