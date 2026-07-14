@@ -27,6 +27,10 @@ Supported automation-oriented commands include:
 - `print mem <addr> <size>`
 - `dump state`
 - `last [n]`: print recent retired-instruction `CommitEvent`s
+- `break <addr>`: set a PC breakpoint
+- `delete-break <addr>`
+- `clear-breaks`
+- `list-breaks`
 - `exit`, `quit`, `q`
 
 Example output:

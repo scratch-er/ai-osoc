@@ -65,7 +65,11 @@ test-debug: $(BIN)
 	out="$$($(BIN) --reset-pc 0x100 --max-cycles 16 -e 'load tests/bin/jalr-ebreak.bin 0x100; reset; run 2; dump state; last 2; exit' 2>&1 || true)"; \
 	printf '%s\n' "$$out"; \
 	printf '%s\n' "$$out" | grep 'NPC_STATE pc=0x00000118 cycles=2 retired=2 halted=0 trap=0' >/dev/null; \
-	printf '%s\n' "$$out" | grep 'NPC_LAST_BEGIN count=2' >/dev/null
+	printf '%s\n' "$$out" | grep 'NPC_LAST_BEGIN count=2' >/dev/null; \
+	out="$$($(BIN) --reset-pc 0x100 --max-cycles 16 -e 'load tests/bin/jalr-ebreak.bin 0x100; break 0x118; reset; run 16; list-breaks; exit' 2>&1 || true)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_BREAK_HIT pc=0x00000118 insts=2 cycles=2' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=stop reason=breakpoint cycles=2 insts=2 pc=0x00000118 halted=0 limit=16' >/dev/null
 
 test-difftest: $(BIN)
 	@out="$$($(BIN) --image tests/bin/auipc-ebreak.bin --reset-pc 0x80000000 --max-cycles 8 --expect-x1 0x80000000 --difftest-ref $(REF_SO) 2>&1)"; \

@@ -173,6 +173,13 @@ public:
 
       if (ev.exception) return {"bad", "illegal_inst"};
       if (top_.debug_halted) return finish_reason(false);
+      if (breakpoint_hit(top_.debug_pc)) {
+        std::printf("NPC_BREAK_HIT pc=0x%08x insts=%llu cycles=%llu\n",
+                    top_.debug_pc,
+                    static_cast<unsigned long long>(retire_),
+                    static_cast<unsigned long long>(cycles_));
+        return {"stop", "breakpoint"};
+      }
     }
     if (cycles_ >= args_.max_cycles) {
       result.status = "limit";
@@ -186,6 +193,29 @@ public:
 
   RunResult run(uint64_t n) {
     return step(n);
+  }
+
+  bool add_breakpoint(uint32_t pc) {
+    if (breakpoint_hit(pc)) return true;
+    if (breakpoints_.size() >= 16) return false;
+    breakpoints_.push_back(pc);
+    return true;
+  }
+
+  bool delete_breakpoint(uint32_t pc) {
+    auto it = std::find(breakpoints_.begin(), breakpoints_.end(), pc);
+    if (it == breakpoints_.end()) return false;
+    breakpoints_.erase(it);
+    return true;
+  }
+
+  void clear_breakpoints() { breakpoints_.clear(); }
+
+  void list_breakpoints() const {
+    std::printf("NPC_BREAK_LIST count=%zu\n", breakpoints_.size());
+    for (uint32_t pc : breakpoints_) {
+      std::printf("NPC_BREAK addr=0x%08x\n", pc);
+    }
   }
 
   RunResult run_to(uint32_t target_pc) {
@@ -211,6 +241,11 @@ public:
   uint64_t retired() const { return retire_; }
 
 private:
+  bool breakpoint_hit(uint32_t pc) const {
+    if (breakpoints_.empty()) return false;
+    return std::find(breakpoints_.begin(), breakpoints_.end(), pc) != breakpoints_.end();
+  }
+
   CommitEvent make_event() const {
     CommitEvent ev{};
     ev.retire = retire_ + 1;
@@ -252,6 +287,7 @@ private:
   uint64_t retire_ = 0;
   int log_level_ = 0;
   bool trace_on_ = false;
+  std::vector<uint32_t> breakpoints_;
 };
 
 void usage(const char *prog) {
@@ -375,6 +411,31 @@ bool execute_command(const std::string &line, Simulator &sim, VNPC &top, Memory 
       uint64_t n = t.size() >= 2 ? std::strtoull(t[1].c_str(), nullptr, 0) : UINT64_MAX;
       *last_result = sim.run(n);
     }
+  } else if (cmd == "break") {
+    if (t.size() < 2) {
+      std::printf("Usage: break <addr>\n");
+    } else {
+      uint32_t pc = 0;
+      if (parse_u32_token(t[1], &pc)) {
+        bool ok = sim.add_breakpoint(pc);
+        std::printf("NPC_BREAK status=%s addr=0x%08x\n", ok ? "set" : "full", pc);
+      }
+    }
+  } else if (cmd == "delete-break") {
+    if (t.size() < 2) {
+      std::printf("Usage: delete-break <addr>\n");
+    } else {
+      uint32_t pc = 0;
+      if (parse_u32_token(t[1], &pc)) {
+        bool ok = sim.delete_breakpoint(pc);
+        std::printf("NPC_BREAK status=%s addr=0x%08x\n", ok ? "deleted" : "missing", pc);
+      }
+    }
+  } else if (cmd == "clear-breaks") {
+    sim.clear_breakpoints();
+    std::printf("NPC_BREAK status=cleared\n");
+  } else if (cmd == "list-breaks") {
+    sim.list_breakpoints();
   } else if (cmd == "print") {
     if (t.size() >= 2 && t[1] == "pc") {
       std::printf("pc = 0x%08x\n", top.debug_pc);

@@ -76,7 +76,7 @@ Inserted P2-S6.5 completed work:
 - NEMU native now records a fixed 64-entry `CommitEvent` ring in `nemu/src/utils/state.c`.
 - NEMU monitor was refactored into a scriptable command dispatcher while preserving interactive mode and old aliases:
   - new CLI: `-e/--exec 'cmd; cmd'`, `-f/--script FILE`
-  - commands: `run`, `step`/`si`, `print pc`, `print reg [i]`, `print mem <addr> <size>`, `dump state`, `last [n]`, `exit`/`quit`/`q`
+  - commands: `run`, `step`/`si`, `print pc`, `print reg [i]`, `print mem <addr> <size>`, `dump state`, `last [n]`, `break`, `delete-break`, `clear-breaks`, `list-breaks`, `exit`/`quit`/`q`
 - NEMU REF shared object now exports event APIs:
   - `difftest_step_event(CommitEvent *ev)`
   - `difftest_get_last_events(CommitEvent *buf, size_t max_n)`
@@ -85,8 +85,9 @@ Inserted P2-S6.5 completed work:
 - NPC C++ harness now has a scriptable shell:
   - `-e 'load ...; reset; run ...; dump state; last ...; exit'`
   - `-f script-file`
-  - commands: `load`, `load_bin`, `reset`, `step`, `run`, `run to`, `run until reg`, `print`, `dump state`, `last`, `log`, `trace`, `exit`.
+  - commands: `load`, `load_bin`, `reset`, `step`, `run`, `run to`, `run until reg`, `print`, `dump state`, `last`, `break`, `delete-break`, `clear-breaks`, `list-breaks`, `log`, `trace`, `exit`.
 - NPC uses a configurable `CommitEvent` ring (`--ring-size`, default 64). Failure dumps print `NPC_LAST_BEGIN/END` bounded event history plus `NPC_REGS`.
+- NEMU and NPC now both support small fixed-size PC breakpoint tables through `break`, `delete-break`, `clear-breaks`, and `list-breaks`; run loops only scan the table when breakpoints are present.
 - NPC DiffTest now prefers the REF event API and compares CommitEvent sequence fields (`pc`, `inst`, `next_pc`, exception/cause, writeback register/value). Full register checks remain fallback/diagnostic context.
 - `npc/Makefile` tests were updated for new result lines with `reason=...` and `insts=...`.
 - Removed stale NEMU debug/tracing code after confirming it was superseded by CommitEvent history:

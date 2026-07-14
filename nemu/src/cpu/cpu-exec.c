@@ -18,6 +18,8 @@
 #include <cpu/difftest.h>
 #include <locale.h>
 
+bool sdb_breakpoint_hit(vaddr_t pc);
+
 CPU_state cpu = {};
 uint64_t g_nr_guest_inst = 0;
 static uint64_t g_timer = 0; // unit: us
@@ -90,6 +92,12 @@ static void execute(uint64_t n) {
     commit_event_record(&ev);
     difftest_after_commit(&s, cpu.pc);
     if (nemu_state.state != NEMU_RUNNING) break;
+    if (sdb_breakpoint_hit(cpu.pc)) {
+      nemu_state.state = NEMU_STOP;
+      nemu_state.halt_pc = cpu.pc;
+      printf("NEMU_BREAK_HIT pc=" FMT_WORD " insts=%" PRIu64 "\n", cpu.pc, g_nr_guest_inst);
+      break;
+    }
     IFDEF(CONFIG_DEVICE, device_update());
   }
 }

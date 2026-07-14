@@ -24,6 +24,10 @@ static int is_batch_mode = false;
 static const char *script_text = NULL;
 static const char *script_file = NULL;
 
+#define NR_BREAKPOINTS 16
+static vaddr_t breakpoints[NR_BREAKPOINTS];
+static int nr_breakpoints = 0;
+
 /* We use the `readline' library to provide more flexibility to read from stdin. */
 static char* rl_gets() {
   static char *line_read = NULL;
@@ -69,6 +73,66 @@ static int cmd_q(char *args) {
 
 static int cmd_last(char *args) {
   commit_event_dump_last(parse_count(args, 0));
+  return 0;
+}
+
+bool sdb_breakpoint_hit(vaddr_t pc) {
+  if (nr_breakpoints == 0) return false;
+  for (int i = 0; i < nr_breakpoints; i ++) {
+    if (breakpoints[i] == pc) return true;
+  }
+  return false;
+}
+
+static int cmd_break(char *args) {
+  if (args == NULL || *args == '\0') {
+    printf("Usage: break <addr>\n");
+    return 0;
+  }
+  if (nr_breakpoints >= NR_BREAKPOINTS) {
+    printf("NEMU_BREAK status=full limit=%d\n", NR_BREAKPOINTS);
+    return 0;
+  }
+  vaddr_t addr = strtoull(args, NULL, 0);
+  for (int i = 0; i < nr_breakpoints; i ++) {
+    if (breakpoints[i] == addr) {
+      printf("NEMU_BREAK status=exists addr=" FMT_WORD "\n", addr);
+      return 0;
+    }
+  }
+  breakpoints[nr_breakpoints ++] = addr;
+  printf("NEMU_BREAK status=set addr=" FMT_WORD "\n", addr);
+  return 0;
+}
+
+static int cmd_delete_break(char *args) {
+  if (args == NULL || *args == '\0') {
+    printf("Usage: delete-break <addr>\n");
+    return 0;
+  }
+  vaddr_t addr = strtoull(args, NULL, 0);
+  for (int i = 0; i < nr_breakpoints; i ++) {
+    if (breakpoints[i] == addr) {
+      breakpoints[i] = breakpoints[-- nr_breakpoints];
+      printf("NEMU_BREAK status=deleted addr=" FMT_WORD "\n", addr);
+      return 0;
+    }
+  }
+  printf("NEMU_BREAK status=missing addr=" FMT_WORD "\n", addr);
+  return 0;
+}
+
+static int cmd_clear_breaks(char *args) {
+  nr_breakpoints = 0;
+  printf("NEMU_BREAK status=cleared\n");
+  return 0;
+}
+
+static int cmd_list_breaks(char *args) {
+  printf("NEMU_BREAK_LIST count=%d\n", nr_breakpoints);
+  for (int i = 0; i < nr_breakpoints; i ++) {
+    printf("NEMU_BREAK addr=" FMT_WORD "\n", breakpoints[i]);
+  }
   return 0;
 }
 
@@ -141,6 +205,10 @@ static struct {
   { "print", "Print pc, reg, or memory", cmd_print },
   { "dump", "Dump state", cmd_dump },
   { "last", "Print last [n] CommitEvents", cmd_last },
+  { "break", "Set a PC breakpoint", cmd_break },
+  { "delete-break", "Delete a PC breakpoint", cmd_delete_break },
+  { "clear-breaks", "Delete all PC breakpoints", cmd_clear_breaks },
+  { "list-breaks", "List PC breakpoints", cmd_list_breaks },
   { "q", "Exit NEMU", cmd_q },
   { "quit", "Exit NEMU", cmd_q },
   { "exit", "Exit NEMU", cmd_q },

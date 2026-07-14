@@ -225,7 +225,7 @@ Sessions:
    - Add a shared C-compatible `CommitEvent` format for retired-instruction history and DiffTest comparison.
    - Refactor NEMU's monitor into a scriptable dispatcher with `-e`/`-f`, while preserving interactive commands and old aliases.
    - Expose NEMU REF event-step APIs so NPC DiffTest can compare CommitEvent sequences rather than only full architectural state.
-   - Add an NPC command shell with `load`, `reset`, `step`, `run`, `run to`, `run until reg`, `print`, `dump state`, `last`, `log`, and `trace` basics.
+   - Add an NPC command shell with `load`, `reset`, `step`, `run`, `run to`, `run until reg`, `print`, `dump state`, `last`, small PC breakpoint commands, `log`, and `trace` basics.
    - Keep passing output concise and dump bounded recent events/registers on failure.
    - Exit when NEMU script mode, NPC shell runs, and event-based DiffTest tiny tests pass.
 

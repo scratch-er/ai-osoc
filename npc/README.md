@@ -59,6 +59,10 @@ Supported commands in the first slice:
 - `print mem <addr> <size>`
 - `dump state`
 - `last [n]`
+- `break <addr>`
+- `delete-break <addr>`
+- `clear-breaks`
+- `list-breaks`
 - `log <level>`: level 1 streams commit events as `NPC_TRACE`
 - `trace on` / `trace off`: stream commit events independent of log level
 - `exit` / `quit`

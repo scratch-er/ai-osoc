@@ -21,5 +21,6 @@
 void sdb_set_batch_mode(void);
 void sdb_set_script(const char *script);
 void sdb_set_script_file(const char *path);
+bool sdb_breakpoint_hit(vaddr_t pc);
 
 #endif
