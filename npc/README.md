@@ -2,7 +2,7 @@
 
 Initial Verilog NPC project for the RV32E_Zicsr core.
 
-Current status: Phase 3 is complete through `P3-S3: System instructions, CSR file, and precise trap entry`. The RTL fetches instructions through DPI-C memory, executes RV32E `lui`, `auipc`, `jal`, `jalr`, B-type branches with target-alignment checks, `lb`/`lh`/`lw`/`lbu`/`lhu`, `sb`/`sh`/`sw`, the RV32E integer ALU/compare/shift subset, Zicsr for the required M-mode CSRs, `ecall`, architectural `ebreak`, `mret`, `wfi`, `fence`, and `fence.i`. It keeps `x0` immutable, implements precise trap entry when `mtvec` is nonzero, and preserves the test-harness `ebreak` GOOD/BAD termination convention when `mtvec == 0`.
+Current status: Phase 3 is complete through `P3-S4: Progressive RV32E cpu-tests regression and DiffTest hardening`. The RTL fetches instructions through DPI-C memory, executes RV32E `lui`, `auipc`, `jal`, `jalr`, B-type branches with target-alignment checks, `lb`/`lh`/`lw`/`lbu`/`lhu`, `sb`/`sh`/`sw`, the RV32E integer ALU/compare/shift subset, Zicsr for the required M-mode CSRs, `ecall`, architectural `ebreak`, `mret`, `wfi`, `fence`, and `fence.i`. It keeps `x0` immutable, implements precise trap entry when `mtvec` is nonzero, and preserves the test-harness `ebreak` GOOD/BAD termination convention when `mtvec == 0`.
 
 The C++ Verilator harness now centers debugging around retired-instruction `CommitEvent`s. It has a scriptable command shell, bounded `last [n]` history, stable `NPC_RESULT`/`NPC_CSR` lines, and event-sequence DiffTest against the NEMU REF shared object when the REF exports `difftest_step_event()`.
 

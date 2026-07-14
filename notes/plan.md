@@ -294,12 +294,12 @@ Sessions:
    - Implemented `mret`, `wfi` as nop, `fence` as nop, and `fence.i` as a visible no-state hook.
    - Exit status: directed `test-csr-trap` passes, NEMU REF shared-object DiffTest is rebuilt with implemented CSR state in the register copy contract, and the full NPC regression plus the focused AM cpu-tests subset pass.
 
-4. **P3-S4: Progressive RV32E cpu-tests regression and DiffTest hardening**
-   - Run the non-M-extension cpu-tests progressively through `ARCH=riscv32e-npc` using the temporary Makefile/`printf` workaround as needed.
-   - Fix instruction/CSR/trap bugs from failing tests rather than adding unrelated features.
-   - Extend CommitEvent/NEMU REF comparison where needed, especially for traps and CSR writes.
-   - Keep M-extension tests out of scope and document any device/runtime blockers separately.
-   - Exit when the RV32E-relevant cpu-test set passes on NPC with DiffTest enabled where practical.
+4. **P3-S4: Progressive RV32E cpu-tests regression and DiffTest hardening** — completed
+   - Ran the full cpu-tests source set through `ARCH=riscv32e-npc` with `NPC_MAX_CYCLES=2000000`.
+   - Confirmed multiply/division workloads pass when built for RV32E because AM/libgcc supplies software helper routines; no RTL M-extension was added.
+   - Implemented the missing AM klib string/memory routines and minimal `printf`/`sprintf`/`snprintf` formatting needed by `hello-str` and `string`.
+   - Added optional `NPC_DIFFTEST_REF` plumbing to the AM NPC run path and reran the full cpu-tests sweep with NEMU event DiffTest enabled.
+   - Exit status: all 35 cpu-tests pass on NPC and pass with DiffTest enabled; P3 exit criteria are met.
 
 Exit criteria:
 

@@ -31,9 +31,11 @@ NPC_HOME ?= $(abspath $(AM_HOME)/../npc)
 NPC_SIM ?= $(NPC_HOME)/build/npc
 NPC_RESET_PC ?= 0x80000000
 NPC_MAX_CYCLES ?= 100000
+NPC_DIFFTEST_REF ?=
+NPC_DIFFTEST_ARGS := $(if $(NPC_DIFFTEST_REF),--difftest-ref $(NPC_DIFFTEST_REF),)
 
 run: insert-arg
 	@$(MAKE) -s -C $(NPC_HOME)
-	@$(NPC_SIM) --image $(IMAGE).bin --reset-pc $(NPC_RESET_PC) --max-cycles $(NPC_MAX_CYCLES)
+	@$(NPC_SIM) --image $(IMAGE).bin --reset-pc $(NPC_RESET_PC) --max-cycles $(NPC_MAX_CYCLES) $(NPC_DIFFTEST_ARGS)
 
 .PHONY: insert-arg
