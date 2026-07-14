@@ -1,6 +1,7 @@
 #include "VNPC.h"
 
 #include "memory.h"
+#include "difftest.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -33,6 +34,7 @@ struct TraceEntry {
 
 struct Args {
   std::string image;
+  std::string difftest_ref;
   uint64_t max_cycles = 100;
   uint32_t reset_pc = 0x20000000u;
   bool wave = false;
@@ -44,7 +46,7 @@ struct Args {
 };
 
 void usage(const char *prog) {
-  std::printf("Usage: %s [--image FILE] [--max-cycles N] [--reset-pc HEX] [--expect-x1 HEX] [--wave] [--dump-trace] [--dump-regs] [--mem-trace]\n", prog);
+  std::printf("Usage: %s [--image FILE] [--max-cycles N] [--reset-pc HEX] [--expect-x1 HEX] [--difftest-ref SO] [--wave] [--dump-trace] [--dump-regs] [--mem-trace]\n", prog);
 }
 
 bool parse_u64(const char *s, uint64_t *value) {
@@ -59,6 +61,14 @@ bool parse_u64(const char *s, uint64_t *value) {
 
 uint32_t debug_reg(const VNPC &top, int idx) {
   return top.debug_regs_flat[idx];
+}
+
+std::array<uint32_t, 16> debug_regs(const VNPC &top) {
+  std::array<uint32_t, 16> regs{};
+  for (int i = 0; i < 16; i++) {
+    regs[i] = debug_reg(top, i);
+  }
+  return regs;
 }
 
 void dump_regs(const VNPC &top) {
@@ -88,6 +98,8 @@ bool parse_args(int argc, char **argv, Args *args) {
   for (int i = 1; i < argc; i++) {
     if (std::strcmp(argv[i], "--image") == 0 && i + 1 < argc) {
       args->image = argv[++i];
+    } else if (std::strcmp(argv[i], "--difftest-ref") == 0 && i + 1 < argc) {
+      args->difftest_ref = argv[++i];
     } else if (std::strcmp(argv[i], "--max-cycles") == 0 && i + 1 < argc) {
       if (!parse_u64(argv[++i], &args->max_cycles)) {
         std::fprintf(stderr, "invalid --max-cycles\n");
@@ -180,6 +192,17 @@ int main(int argc, char **argv) {
   eval_cycle();
   eval_cycle();
   top->reset = 0;
+  top->eval();
+
+  Difftest difftest;
+  bool difftest_pass = true;
+  if (!args.difftest_ref.empty()) {
+    auto regs = debug_regs(*top);
+    if (!difftest.init(args.difftest_ref, memory, args.reset_pc, regs.data(), top->debug_pc)) {
+      std::printf("NPC_RESULT status=bad reason=difftest_init_failed cycles=0 pc=0x%08x\n", top->debug_pc);
+      return 1;
+    }
+  }
 
   std::array<TraceEntry, TRACE_DEPTH> trace;
   size_t trace_count = 0;
@@ -189,15 +212,22 @@ int main(int argc, char **argv) {
     trace_count++;
     eval_cycle();
     cycles++;
+    if (difftest.enabled() && !top->debug_halted) {
+      auto regs = debug_regs(*top);
+      if (!difftest.step(regs.data(), top->debug_pc)) {
+        difftest_pass = false;
+        break;
+      }
+    }
   }
 
   bool limit = !top->debug_halted && cycles >= args.max_cycles;
   bool check_pass = !args.check_x1 || top->debug_x1 == args.expect_x1;
   uint32_t trap_status = limit ? NPC_STATUS_LIMIT : top->debug_trap_status;
   bool trap_pass = trap_status == NPC_STATUS_GOOD;
-  bool run_pass = check_pass && trap_pass;
+  bool run_pass = check_pass && trap_pass && difftest_pass;
   const char *status = "bad";
-  if (limit) {
+  if (limit && difftest_pass) {
     status = "limit";
   } else if (run_pass) {
     status = "good";

@@ -2,11 +2,12 @@ TOP := NPC
 BUILD_DIR := build
 OBJ_DIR := $(BUILD_DIR)/obj_dir
 BIN := $(BUILD_DIR)/npc
+REF_SO ?= ../nemu/build/riscv32-nemu-interpreter-so
 VERILATOR ?= verilator
 CXXFLAGS += -std=c++17 -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable -Wno-unused-but-set-variable -Wno-sign-compare -O2
 
 RTL_SRCS := $(shell find rtl -name '*.v' | sort)
-CPP_SRCS := csrc/main.cpp csrc/memory.cpp csrc/dpi.cpp
+CPP_SRCS := csrc/main.cpp csrc/memory.cpp csrc/dpi.cpp csrc/difftest.cpp
 TRACE ?= 0
 
 VERILATOR_FLAGS := -Wall --cc --exe --build --top-module $(TOP) -Irtl -Mdir $(OBJ_DIR) -o ../npc $(CPP_SRCS) $(RTL_SRCS)
@@ -14,7 +15,7 @@ ifeq ($(TRACE),1)
 VERILATOR_FLAGS += --trace
 endif
 
-.PHONY: all run smoke test-addi test-jalr-ebreak test-lw-sw test-debug clean
+.PHONY: all run smoke test-addi test-jalr-ebreak test-lw-sw test-debug test-difftest clean
 
 all: $(BIN)
 
@@ -60,6 +61,19 @@ test-debug: $(BIN)
 	printf '%s\n' "$$out"; \
 	printf '%s\n' "$$out" | grep 'NPC_MEM w addr=0x00000140 data=0x0000002a' >/dev/null; \
 	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good cycles=5 pc=0x00000110 halted=1 limit=16 x1=0x0000002a a0=0x00000000 trap=1' >/dev/null
+
+test-difftest: $(BIN)
+	@out="$$($(BIN) --image tests/bin/auipc-ebreak.bin --reset-pc 0x80000000 --max-cycles 8 --expect-x1 0x80000000 --difftest-ref $(REF_SO) 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_DIFFTEST status=on' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_CHECK x1=0x80000000 expect=0x80000000 PASS' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good cycles=2 pc=0x80000004 halted=1 limit=8 x1=0x80000000 a0=0x00000000 trap=1' >/dev/null; \
+	out="$$($(BIN) --image tests/bin/difftest-jalr-ebreak.bin --reset-pc 0x80000000 --max-cycles 16 --expect-x1 0x80000000 --difftest-ref $(REF_SO) 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good cycles=4 pc=0x80000010 halted=1 limit=16 x1=0x80000000 a0=0x00000000 trap=1' >/dev/null; \
+	out="$$($(BIN) --image tests/bin/difftest-lw-sw.bin --reset-pc 0x80000000 --max-cycles 16 --expect-x1 0x2a --difftest-ref $(REF_SO) 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good cycles=5 pc=0x80000010 halted=1 limit=16 x1=0x0000002a a0=0x00000000 trap=1' >/dev/null
 
 clean:
 	rm -rf $(BUILD_DIR)

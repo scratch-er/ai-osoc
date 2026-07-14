@@ -53,6 +53,17 @@ bool Memory::load_image(const std::string &path) {
   return true;
 }
 
+void Memory::copy_to(void *dst, uint32_t addr, uint32_t len) const {
+  if (!contains(addr, len)) {
+    std::fprintf(stderr, "pmem copy out of bounds: addr=0x%08x len=%u\n", addr, len);
+    std::memset(dst, 0, len);
+    return;
+  }
+
+  uint32_t off = addr - base_addr_;
+  std::memcpy(dst, data_ + off, len);
+}
+
 uint32_t Memory::read32(uint32_t addr) const {
   if (!contains(addr, 4)) {
     std::fprintf(stderr, "pmem read out of bounds: addr=0x%08x\n", addr);

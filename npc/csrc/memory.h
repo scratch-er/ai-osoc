@@ -13,6 +13,7 @@ public:
   uint32_t size() const { return static_cast<uint32_t>(data_size_); }
   bool contains(uint32_t addr, uint32_t len) const;
   void set_trace(bool enable) { trace_ = enable; }
+  void copy_to(void *dst, uint32_t addr, uint32_t len) const;
   uint32_t read32(uint32_t addr) const;
   void write32(uint32_t addr, uint32_t data);
 

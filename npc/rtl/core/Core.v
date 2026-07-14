@@ -31,7 +31,9 @@ module Core #(
   wire [6:0]  funct7;
   wire [31:0] imm_i;
   wire [31:0] imm_s;
+  wire [31:0] imm_u;
   wire        is_addi;
+  wire        is_auipc;
   wire        is_lw;
   wire        is_sw;
   wire        is_jalr;
@@ -46,7 +48,7 @@ module Core #(
   wire        rd_is_rv32e = rd[4] == 1'b0;
   wire        rs1_is_rv32e = rs1[4] == 1'b0;
   wire        rs2_is_rv32e = rs2[4] == 1'b0;
-  wire        writes_rd = is_addi || is_lw || is_jalr;
+  wire        writes_rd = is_addi || is_auipc || is_lw || is_jalr;
   wire        reads_rs2 = is_sw;
   wire        rd_valid = !writes_rd || rd_is_rv32e;
   wire        rs1_valid = (is_ebreak || rs1_is_rv32e);
@@ -83,7 +85,9 @@ module Core #(
     .funct7(funct7),
     .imm_i(imm_i),
     .imm_s(imm_s),
+    .imm_u(imm_u),
     .is_addi(is_addi),
+    .is_auipc(is_auipc),
     .is_lw(is_lw),
     .is_sw(is_sw),
     .is_jalr(is_jalr),
@@ -107,8 +111,8 @@ module Core #(
   );
 
   Exu u_exu (
-    .src1(rs1_data),
-    .src2(imm_i),
+    .src1(is_auipc ? pc : rs1_data),
+    .src2(is_auipc ? imm_u : imm_i),
     .add_result(alu_result)
   );
 

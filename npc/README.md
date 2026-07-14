@@ -2,7 +2,7 @@
 
 Initial Verilog NPC project for the RV32E_Zicsr core.
 
-Current status: P2-S4 DPI-C data memory slice. The RTL fetches instructions through DPI-C memory, executes RV32E `addi`, aligned `lw`/`sw`, and `jalr`, keeps `x0` immutable, and terminates on `ebreak` with GOOD/BAD status from `a0` (`x10 == 0` means GOOD). Unsupported instructions halt with BAD status.
+Current status: P2-S6 early DiffTest slice. The RTL fetches instructions through DPI-C memory, executes RV32E `addi`, `auipc`, aligned `lw`/`sw`, and `jalr`, keeps `x0` immutable, and terminates on `ebreak` with GOOD/BAD status from `a0` (`x10 == 0` means GOOD). Unsupported instructions halt with BAD status. The C++ harness can optionally compare retired state against the NEMU REF shared object for the current tiny subset.
 
 ## Commands
 
@@ -36,10 +36,22 @@ Run the aligned `lw`/`sw` data-memory regression:
 make -C npc test-lw-sw
 ```
 
-Run with an optional image, reset PC, cycle limit, and optional x1 check:
+Run the debug-output regression:
 
 ```sh
-make -C npc run ARGS="--image path/to/image.bin --reset-pc 0x20000000 --max-cycles 100 --expect-x1 0x5"
+make -C npc test-debug
+```
+
+Run the early DiffTest regression against NEMU REF:
+
+```sh
+make -C npc test-difftest
+```
+
+Run with an optional image, reset PC, cycle limit, optional x1 check, and optional DiffTest REF:
+
+```sh
+make -C npc run ARGS="--image path/to/image.bin --reset-pc 0x80000000 --max-cycles 100 --expect-x1 0x5 --difftest-ref ../nemu/build/riscv32-nemu-interpreter-so"
 ```
 
 Enable waveform generation:
