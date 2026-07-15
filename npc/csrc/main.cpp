@@ -65,8 +65,12 @@ uint32_t debug_reg(const VNPC &top, int idx) {
   return top.debug_regs_flat[idx];
 }
 
+bool is_clint_addr(uint32_t addr) {
+  return addr >= 0x02000000u && addr < 0x02010000u;
+}
+
 bool is_mmio_addr(uint32_t addr) {
-  return addr == 0x10000000u || (addr >= 0x02000000u && addr < 0x0200c000u);
+  return addr == 0x10000000u || is_clint_addr(addr);
 }
 
 uint8_t low_contiguous_len(uint8_t wmask) {
@@ -75,6 +79,12 @@ uint8_t low_contiguous_len(uint8_t wmask) {
     len++;
   }
   return len == 0 ? 4 : len;
+}
+
+uint8_t load_len_from_inst(uint32_t inst) {
+  uint32_t funct3 = (inst >> 12) & 0x7u;
+  return (funct3 == 0u || funct3 == 4u) ? 1 :
+         (funct3 == 1u || funct3 == 5u) ? 2 : 4;
 }
 
 std::array<uint32_t, 16> debug_regs(const VNPC &top) {
@@ -165,7 +175,7 @@ public:
       if (cycles_ >= args_.max_cycles) return {"limit", "cycle_limit"};
       if (!top_.commit_valid) {
         memory_.clear_mmio_record();
-        memory_.set_time(retire_ + 1);
+        memory_.set_time(cycles_ + 1);
         eval_cycle();
         pending_mmio_read_ = memory_.mmio_record();
         if (pending_mmio_read_.is_write) {
@@ -176,7 +186,7 @@ public:
       }
 
       memory_.clear_mmio_record();
-      memory_.set_time(retire_ + 1);
+      memory_.set_time(cycles_ + 1);
       top_.eval();
       CommitEvent ev = make_event();
       MMIOReplayRecord read_mmio_record = pending_mmio_read_;
@@ -185,13 +195,18 @@ public:
         read_mmio_record = memory_.mmio_record();
       }
       bool commit_mem_wen = top_.commit_mem_wen;
+      bool commit_mem_ren = top_.commit_mem_ren;
       uint32_t commit_mem_addr = top_.commit_mem_addr;
       uint32_t commit_mem_wdata = top_.commit_mem_wdata;
+      uint32_t commit_mem_rdata = top_.commit_mem_rdata;
       uint8_t commit_mem_wmask = static_cast<uint8_t>(top_.commit_mem_wmask & 0xf);
       MMIOReplayRecord mmio_record{};
       if (commit_mem_wen && is_mmio_addr(commit_mem_addr)) {
         mmio_record = {true, true, commit_mem_addr, low_contiguous_len(commit_mem_wmask),
                        commit_mem_wmask, commit_mem_wdata, 0};
+      } else if (commit_mem_ren && is_clint_addr(commit_mem_addr)) {
+        mmio_record = {true, false, commit_mem_addr, load_len_from_inst(top_.commit_inst),
+                       0, 0, commit_mem_rdata};
       }
       eval_cycle();
       pending_mmio_read_ = memory_.mmio_record();

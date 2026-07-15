@@ -30,7 +30,7 @@ bool vaddr_access_ok(vaddr_t addr, int len) {
   return paddr_is_backed(addr, len)
       || native_device_access_ok(addr, len)
       || addr == 0x10000000u
-      || (addr >= 0x02000000u && addr + len <= 0x0200c000u);
+      || (addr >= 0x02000000u && addr + len <= 0x02010000u);
 }
 
 word_t vaddr_ifetch(vaddr_t addr, int len) {

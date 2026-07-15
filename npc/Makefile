@@ -15,7 +15,7 @@ ifeq ($(TRACE),1)
 VERILATOR_FLAGS += --trace
 endif
 
-.PHONY: all run smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-axi-local test-mem-latency test-access-fault test-rv32e-illegal test-csr-trap test-debug test-difftest clean
+.PHONY: all run smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-axi-local test-mem-latency test-access-fault test-rv32e-illegal test-csr-trap test-debug test-difftest test-clint clean
 
 all: $(BIN)
 
@@ -156,6 +156,16 @@ test-difftest: $(BIN)
 	out="$$($(BIN) --image tests/bin/difftest-alu.bin --reset-pc 0x80000000 --max-cycles 96 --expect-x1 0x12345678 --difftest-ref $(REF_SO) 2>&1)"; \
 	printf '%s\n' "$$out"; \
 	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap cycles=84 insts=21 pc=0x80000050 halted=1 limit=96 x1=0x12345678 a0=0x00000000 trap=1' >/dev/null
+
+test-clint: $(BIN)
+	@mkdir -p $(BUILD_DIR)/tests
+	@python3 tests/make-clint-bin.py $(BUILD_DIR)/tests/clint.bin
+	@out="$$($(BIN) --image $(BUILD_DIR)/tests/clint.bin --reset-pc 0x80000000 --max-cycles 80 --expect-x1 0x1 --difftest-ref $(REF_SO) --mem-trace 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_DIFFTEST status=on' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_CHECK x1=0x00000001 expect=0x00000001 PASS' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap' >/dev/null; \
+	if printf '%s\n' "$$out" | grep -q 'NPC_MMIO [rw] addr=0x0200'; then exit 1; fi
 
 clean:
 	rm -rf $(BUILD_DIR)

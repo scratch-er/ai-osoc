@@ -27,9 +27,11 @@ module Core #(
   output        commit_exception,
   output [31:0] commit_cause,
   output        commit_mem_wen,
+  output        commit_mem_ren,
   output [31:0] commit_mem_addr,
   output [31:0] commit_mem_wdata,
   output [3:0]  commit_mem_wmask,
+  output [31:0] commit_mem_rdata,
   input         axi_awready,
   output        axi_awvalid,
   output [31:0] axi_awaddr,
@@ -120,14 +122,22 @@ module Core #(
   wire [31:0] lsu_write_addr;
   wire [31:0] lsu_write_data;
   wire [3:0]  lsu_write_mask;
-  wire        lsu_bus_valid;
-  wire        lsu_bus_write;
-  wire [31:0] lsu_bus_addr;
-  wire [31:0] lsu_bus_wdata;
-  wire [3:0]  lsu_bus_wmask;
-  wire        lsu_bus_ready;
-  wire [31:0] lsu_bus_rdata;
-  wire        lsu_bus_error;
+  wire        lsu_raw_valid;
+  wire        lsu_raw_write;
+  wire [31:0] lsu_raw_addr;
+  wire [31:0] lsu_raw_wdata;
+  wire [3:0]  lsu_raw_wmask;
+  wire        lsu_raw_ready;
+  wire [31:0] lsu_raw_rdata;
+  wire        lsu_raw_error;
+  wire        lsu_is_clint;
+  wire        lsu_arb_valid;
+  wire        lsu_arb_ready;
+  wire [31:0] lsu_arb_rdata;
+  wire        lsu_arb_error;
+  wire        clint_ready;
+  wire [31:0] clint_rdata;
+  wire        clint_error;
   wire        axi_req_valid;
   wire        axi_req_write;
   wire [31:0] axi_req_addr;
@@ -193,7 +203,7 @@ module Core #(
   assign base_trap_request = inst_error || !decode_legal || pc_exception || mem_misaligned || is_ecall || is_ebreak;
   assign can_complete_no_mem_fault = inst_valid && !inst_error && decode_legal && !mem_misaligned && !pc_exception && !is_ecall && !(base_trap_request && mtvec != 32'd0);
   assign mem_access = can_complete_no_mem_fault && (mem_ren || mem_wen);
-  assign mem_access_fault = mem_access && lsu_bus_ready && lsu_bus_error;
+  assign mem_access_fault = mem_access && lsu_raw_ready && lsu_raw_error;
   assign trap_request = base_trap_request || mem_access_fault;
   assign precise_trap = trap_request && mtvec != 32'd0;
   assign bad_without_vector = trap_request && mtvec == 32'd0;
@@ -207,10 +217,15 @@ module Core #(
                            (mem_wen && mem_access_fault) ? {27'd0, `NPC_EXC_STORE_ACCESS_FAULT} :
                            is_ecall ? {27'd0, `NPC_EXC_ECALL_M} :
                            is_ebreak ? {27'd0, `NPC_EXC_BREAKPOINT} : 32'd0;
-  assign mem_ready = !mem_access || lsu_bus_ready;
+  assign mem_ready = !mem_access || lsu_raw_ready;
   assign retire_ready = !reset && !halted && inst_valid && mem_ready;
   assign wb_wen = complete_inst && mem_ready && writes_rd && !is_mret;
   assign lsu_wen = can_complete_no_mem_fault && mem_wen;
+  assign lsu_is_clint = lsu_raw_valid && (lsu_raw_addr[31:16] == 16'h0200);
+  assign lsu_arb_valid = lsu_raw_valid && !lsu_is_clint;
+  assign lsu_raw_ready = lsu_is_clint ? clint_ready : lsu_arb_ready;
+  assign lsu_raw_rdata = lsu_is_clint ? clint_rdata : lsu_arb_rdata;
+  assign lsu_raw_error = lsu_is_clint ? clint_error : lsu_arb_error;
 
   assign imm_data = (imm_sel == `NPC_IMM_S) ? imm_s :
                     (imm_sel == `NPC_IMM_B) ? imm_b :
@@ -238,9 +253,11 @@ module Core #(
   assign commit_exception = bad_without_vector || inst_error || mem_access_fault;
   assign commit_cause = exception_cause;
   assign commit_mem_wen = retire_ready && lsu_wen;
+  assign commit_mem_ren = retire_ready && complete_inst && mem_ren;
   assign commit_mem_addr = lsu_write_addr;
   assign commit_mem_wdata = lsu_write_data;
   assign commit_mem_wmask = lsu_write_mask;
+  assign commit_mem_rdata = lsu_rdata;
 
   Ifu u_ifu (
     .pc(fetch_pc),
@@ -315,17 +332,30 @@ module Core #(
     .load_unsigned(mem_unsigned),
     .addr(lsu_addr),
     .wdata(rs2_data),
-    .bus_ready(lsu_bus_ready),
-    .bus_rdata(lsu_bus_rdata),
-    .bus_valid(lsu_bus_valid),
-    .bus_write(lsu_bus_write),
-    .bus_addr(lsu_bus_addr),
-    .bus_wdata(lsu_bus_wdata),
-    .bus_wmask(lsu_bus_wmask),
+    .bus_ready(lsu_raw_ready),
+    .bus_rdata(lsu_raw_rdata),
+    .bus_valid(lsu_raw_valid),
+    .bus_write(lsu_raw_write),
+    .bus_addr(lsu_raw_addr),
+    .bus_wdata(lsu_raw_wdata),
+    .bus_wmask(lsu_raw_wmask),
     .rdata(lsu_rdata),
     .write_addr(lsu_write_addr),
     .write_data(lsu_write_data),
     .write_mask(lsu_write_mask)
+  );
+
+  Clint u_clint (
+    .clock(clock),
+    .reset(reset),
+    .valid(lsu_is_clint),
+    .write(lsu_raw_write),
+    .addr(lsu_raw_addr),
+    .wdata(lsu_raw_wdata),
+    .wmask(lsu_raw_wmask),
+    .ready(clint_ready),
+    .rdata(clint_rdata),
+    .error(clint_error)
   );
 
   AxiArbiter u_axi_arbiter (
@@ -334,14 +364,14 @@ module Core #(
     .ifu_ready(ifu_bus_ready),
     .ifu_rdata(ifu_bus_rdata),
     .ifu_error(ifu_bus_error),
-    .lsu_valid(lsu_bus_valid),
-    .lsu_write(lsu_bus_write),
-    .lsu_addr(lsu_bus_addr),
-    .lsu_wdata(lsu_bus_wdata),
-    .lsu_wmask(lsu_bus_wmask),
-    .lsu_ready(lsu_bus_ready),
-    .lsu_rdata(lsu_bus_rdata),
-    .lsu_error(lsu_bus_error),
+    .lsu_valid(lsu_arb_valid),
+    .lsu_write(lsu_raw_write),
+    .lsu_addr(lsu_raw_addr),
+    .lsu_wdata(lsu_raw_wdata),
+    .lsu_wmask(lsu_raw_wmask),
+    .lsu_ready(lsu_arb_ready),
+    .lsu_rdata(lsu_arb_rdata),
+    .lsu_error(lsu_arb_error),
     .bus_valid(axi_req_valid),
     .bus_write(axi_req_write),
     .bus_addr(axi_req_addr),

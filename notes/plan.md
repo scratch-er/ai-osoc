@@ -565,15 +565,15 @@ Prerequisites:
 
 Sessions:
 
-1. **P6-S1: Physical CLINT design and implementation**
-   - Locate the current temporary timer implementation in NPC C++/DPI and NEMU NPC-compatible MMIO devices.
-   - Decide the implementation boundary in one plan before editing: RTL/bus-visible CLINT state versus simulation harness support. Let the user revise this design if the boundary has meaningful trade-offs.
-   - Preserve ordered MMIO replay records for all CLINT reads used by DiffTest.
-   - Add directed CLINT tests before or alongside the behavior change.
-   - Replace retired-instruction-based `mtime` with a 64-bit physical cycle counter incrementing once per core clock while reset behavior is well-defined.
-   - Expose `mtime` low/high at `0x0200bff8`/`0x0200bffc` through the local AXI/MMIO path.
-   - Implement ignored no-error behavior for `msip`, `mtimecmp`, and high-half aliases used by 32-bit code, per `specs/core.md`.
-   - Decide and test reserved-address behavior in the CLINT window; prefer no-error ignored behavior only for named ignored registers and keep reserved holes as bus errors if this does not conflict with required software.
+1. **P6-S1: Physical CLINT design and implementation** — done.
+   - Final approved design is recorded in `notes/clint-implementation-plan.md`.
+   - Implemented CLINT as a physical RTL LSU-side combinational bypass before `AxiArbiter` (Position 5), not as a C++ timer, post-arbiter local-device mux, or AXI xbar.
+   - Kept IFU, `AxiArbiter.v`, and `AxiMaster.v` unchanged; exact-cycle non-CLINT load/store checks still pass.
+   - Preserved ordered MMIO replay records for CLINT reads by replaying committed RTL load data into the NEMU REF.
+   - Added `make -C npc test-clint` for directed physical CLINT coverage.
+   - Replaced retired-instruction-based `mtime` with a 64-bit physical cycle counter incrementing once per core clock while reset behavior is well-defined.
+   - Exposed `mtime` low/high at `0x0200bff8`/`0x0200bffc` through the LSU-side CLINT path.
+   - Implemented ignored no-error behavior for CLINT-window writes and unimplemented CLINT reads; ignored/reserved CLINT reads return zero.
 
 2. **P6-S2: Timer/DiffTest/workload validation**
    - Revalidate `abstract-machine/am/src/riscv/npc/timer.c` robust 64-bit read ordering under a ticking cycle timer.

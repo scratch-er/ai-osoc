@@ -87,9 +87,11 @@ module NPC #(
   output        commit_exception,
   output [31:0] commit_cause,
   output        commit_mem_wen,
+  output        commit_mem_ren,
   output [31:0] commit_mem_addr,
   output [31:0] commit_mem_wdata,
-  output [3:0]  commit_mem_wmask
+  output [3:0]  commit_mem_wmask,
+  output [31:0] commit_mem_rdata
 );
 
   wire core_awready;
@@ -179,9 +181,11 @@ module NPC #(
     .commit_exception(commit_exception),
     .commit_cause(commit_cause),
     .commit_mem_wen(commit_mem_wen),
+    .commit_mem_ren(commit_mem_ren),
     .commit_mem_addr(commit_mem_addr),
     .commit_mem_wdata(commit_mem_wdata),
     .commit_mem_wmask(commit_mem_wmask),
+    .commit_mem_rdata(commit_mem_rdata),
     .axi_awready(core_awready),
     .axi_awvalid(io_master_awvalid),
     .axi_awaddr(io_master_awaddr),
