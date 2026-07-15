@@ -23,13 +23,40 @@ char  *strncpy   (char *dst, const char *src, size_t n);
 int    strcmp    (const char *s1, const char *s2);
 int    strncmp   (const char *s1, const char *s2, size_t n);
 
+// ctype.h
+int    iscntrl   (int c);
+int    isblank   (int c);
+int    isspace   (int c);
+int    isupper   (int c);
+int    islower   (int c);
+int    isalpha   (int c);
+int    isdigit   (int c);
+int    isxdigit  (int c);
+int    isalnum   (int c);
+int    ispunct   (int c);
+int    isgraph   (int c);
+int    isprint   (int c);
+int    tolower   (int c);
+int    toupper   (int c);
+
 // stdlib.h
+#ifndef RAND_MAX
+#define RAND_MAX 32767
+#endif
 void   srand     (unsigned int seed);
 int    rand      (void);
 void  *malloc    (size_t size);
 void   free      (void *ptr);
 int    abs       (int x);
 int    atoi      (const char *nptr);
+long   atol      (const char *nptr);
+long long atoll  (const char *nptr);
+long   strtol    (const char *str, char **endptr, int base);
+long long strtoll(const char *str, char **endptr, int base);
+unsigned long strtoul(const char *str, char **endptr, int base);
+unsigned long long strtoull(const char *str, char **endptr, int base);
+void   exit      (int code);
+void   abort     (void);
 
 // stdio.h
 int    printf    (const char *format, ...);

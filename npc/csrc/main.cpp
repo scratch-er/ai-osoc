@@ -152,6 +152,8 @@ public:
       if (cycles_ >= args_.max_cycles) return {"limit", "cycle_limit"};
       if (!top_.commit_valid) return {"bad", "no_commit"};
 
+      memory_.set_time(retire_ + 1);
+      top_.eval();
       CommitEvent ev = make_event();
       bool commit_mem_wen = top_.commit_mem_wen;
       uint32_t commit_mem_addr = top_.commit_mem_addr;
@@ -161,7 +163,6 @@ public:
       cycles_++;
       ring_.push(ev);
       retire_++;
-      memory_.set_time(retire_);
       if (commit_mem_wen) {
         memory_.commit_mmio_write(commit_mem_addr, commit_mem_wdata, commit_mem_wmask);
       }
