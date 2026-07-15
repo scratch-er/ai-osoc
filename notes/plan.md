@@ -575,13 +575,13 @@ Sessions:
    - Exposed `mtime` low/high at `0x0200bff8`/`0x0200bffc` through the LSU-side CLINT path.
    - Implemented ignored no-error behavior for CLINT-window writes and unimplemented CLINT reads; ignored/reserved CLINT reads return zero.
 
-2. **P6-S2: Timer/DiffTest/workload validation**
-   - Revalidate `abstract-machine/am/src/riscv/npc/timer.c` robust 64-bit read ordering under a ticking cycle timer.
-   - Ensure NEMU REF receives replayed DUT `mtime` read data and does not use its own timer value for matched MMIO reads.
-   - Add/adjust tests that read `mtime` across low-word rollover if practical, plus a monotonic timer smoke.
-   - Re-run NPC `hello`, AM timer/devscan smokes, bounded `yield-os`, bounded `thread-os`, full 35-test `cpu-tests` with DiffTest, and NPC `rt-thread-am` with DiffTest.
-   - Confirm no timer interrupt is generated and UART output remains ordered and non-duplicated.
-   - Document any remaining expected bounded runs separately from failures.
+2. **P6-S2: Timer/DiffTest/workload validation** — done, awaiting user revision before commit.
+   - Strengthened `make -C npc test-clint` so the generated program performs the AM-style `mtimeh/mtime/mtimeh` read sequence, checks the high word remains stable in the short smoke, checks the low word advances, checks ignored CLINT-window writes/reads, and runs with NEMU event DiffTest replay.
+   - Revalidated that committed CLINT reads are replayed from DUT RTL load data into the NEMU REF: the strengthened CLINT test passed with `NPC_DIFFTEST status=on`, `NEMU_RESULT status=good`, and `NPC_RESULT status=good`.
+   - Re-ran NPC `hello`, AM timer/devscan smoke, bounded `yield-os`, bounded `thread-os`, full 35-test `cpu-tests` with DiffTest, and NPC `rt-thread-am` with DiffTest.
+   - Confirmed no timer interrupt behavior is being generated: CTE workloads only show synchronous `ecall` trap state (`mcause=0x0000000b`) at the bound, and RT-Thread completes scripted `halt` without asynchronous timer-trap evidence.
+   - Confirmed UART output remains ordered/non-duplicated in `hello`, bounded CTE smokes, and RT-Thread shell output.
+   - Documented expected bounded runs separately from failures in `notes/next.md`.
 
 3. **P6-S3: Phase 6 closeout notes**
    - Update `notes/next.md` with exact commands, pass/fail table, CLINT behavior, and known caveats.

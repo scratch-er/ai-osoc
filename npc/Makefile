@@ -160,7 +160,7 @@ test-difftest: $(BIN)
 test-clint: $(BIN)
 	@mkdir -p $(BUILD_DIR)/tests
 	@python3 tests/make-clint-bin.py $(BUILD_DIR)/tests/clint.bin
-	@out="$$($(BIN) --image $(BUILD_DIR)/tests/clint.bin --reset-pc 0x80000000 --max-cycles 80 --expect-x1 0x1 --difftest-ref $(REF_SO) --mem-trace 2>&1)"; \
+	@out="$$($(BIN) --image $(BUILD_DIR)/tests/clint.bin --reset-pc 0x80000000 --max-cycles 120 --expect-x1 0x1 --difftest-ref $(REF_SO) --mem-trace 2>&1)"; \
 	printf '%s\n' "$$out"; \
 	printf '%s\n' "$$out" | grep 'NPC_DIFFTEST status=on' >/dev/null; \
 	printf '%s\n' "$$out" | grep 'NPC_CHECK x1=0x00000001 expect=0x00000001 PASS' >/dev/null; \
