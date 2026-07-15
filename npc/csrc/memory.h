@@ -6,7 +6,7 @@
 
 class Memory {
 public:
-  explicit Memory(uint32_t base_addr = 0x20000000u, uint32_t size = 16u * 1024u * 1024u);
+  explicit Memory(uint32_t base_addr = 0x20000000u, uint32_t size = 128u * 1024u * 1024u);
 
   bool load_image(const std::string &path);
   bool load_image_at(const std::string &path, uint32_t addr);

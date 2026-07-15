@@ -60,7 +60,11 @@ bool Difftest::init(const std::string &ref_so, const Memory &memory, uint32_t re
 }
 
 bool Difftest::step(const CommitEvent &dut_event, const uint32_t *regs, uint32_t pc,
-                    uint32_t mstatus, uint32_t mtvec, uint32_t mepc, uint32_t mcause) {
+                    uint32_t mstatus, uint32_t mtvec, uint32_t mepc, uint32_t mcause,
+                    bool *both_ebreak) {
+  if (both_ebreak != nullptr) {
+    *both_ebreak = false;
+  }
   if (!enabled_) {
     return true;
   }
@@ -68,6 +72,23 @@ bool Difftest::step(const CommitEvent &dut_event, const uint32_t *regs, uint32_t
   if (ref_step_event_ != nullptr) {
     CommitEvent ref_event{};
     ref_step_event_(&ref_event);
+    if (ref_event.pc == dut_event.pc && ref_event.inst == dut_event.inst && dut_event.inst == 0x00100073u) {
+      if (both_ebreak != nullptr) {
+        *both_ebreak = true;
+      }
+      return true;
+    }
+    if (ref_event.inst == 0x00100073u || dut_event.inst == 0x00100073u) {
+      char ref_buf[160];
+      char dut_buf[160];
+      commit_event_format(&ref_event, ref_buf, sizeof(ref_buf));
+      commit_event_format(&dut_event, dut_buf, sizeof(dut_buf));
+      std::printf("DIFFTEST_RESULT status=fail reason=ebreak_mismatch retire=%llu\n",
+                  static_cast<unsigned long long>(dut_event.retire));
+      std::printf("DIFFTEST_REF %s\n", ref_buf);
+      std::printf("DIFFTEST_DUT %s\n", dut_buf);
+      return false;
+    }
     if (!check_event(ref_event, dut_event)) {
       CPUState ref;
       ref_regcpy_(&ref, DIFFTEST_TO_DUT);

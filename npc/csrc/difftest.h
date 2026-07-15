@@ -18,7 +18,8 @@ public:
             uint32_t mepc, uint32_t mcause);
   bool enabled() const { return enabled_; }
   bool step(const CommitEvent &dut_event, const uint32_t *regs, uint32_t pc,
-            uint32_t mstatus, uint32_t mtvec, uint32_t mepc, uint32_t mcause);
+            uint32_t mstatus, uint32_t mtvec, uint32_t mepc, uint32_t mcause,
+            bool *both_ebreak);
   void dump_last_ref(size_t n) const;
 
 private:

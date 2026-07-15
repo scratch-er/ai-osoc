@@ -123,12 +123,8 @@ module Core #(
   wire [31:0] branch_target = pc + imm_b;
   wire [31:0] normal_next_pc = is_mret ? mepc : (is_jalr ? jalr_target : (is_jal ? jal_target : (branch_taken ? branch_target : pc_plus_4)));
   wire [31:0] final_wb_data = wb_data;
-  wire [1:0]  ebreak_status = (debug_a0 == 32'd0) ? `NPC_STATUS_GOOD : `NPC_STATUS_BAD;
-  wire        harness_ebreak = is_ebreak && mtvec == 32'd0;
   wire        bad_without_vector;
   wire        unused = |{opcode, funct3, funct7, mcause};
-
-  import "DPI-C" function void npc_trap(input int code);
 
   assign branch_target_misaligned = branch_taken && branch_target[1:0] != 2'b00;
   assign jal_target_misaligned = is_jal && jal_target[1:0] != 2'b00;
@@ -139,12 +135,12 @@ module Core #(
                            (mem_ren && mem_misaligned) ? {27'd0, `NPC_EXC_LOAD_ADDR_MISALIGNED} :
                            (mem_wen && mem_misaligned) ? {27'd0, `NPC_EXC_STORE_ADDR_MISALIGNED} :
                            is_ecall ? {27'd0, `NPC_EXC_ECALL_M} :
-                           (is_ebreak && !harness_ebreak) ? {27'd0, `NPC_EXC_BREAKPOINT} : 32'd0;
-  assign trap_request = !decode_legal || pc_exception || mem_misaligned || is_ecall || (is_ebreak && !harness_ebreak);
+                           is_ebreak ? {27'd0, `NPC_EXC_BREAKPOINT} : 32'd0;
+  assign trap_request = !decode_legal || pc_exception || mem_misaligned || is_ecall || is_ebreak;
   assign precise_trap = trap_request && mtvec != 32'd0;
   assign bad_without_vector = trap_request && mtvec == 32'd0;
   assign complete_inst = decode_legal && !mem_misaligned && !pc_exception && !is_ecall && !precise_trap;
-  assign wb_wen = complete_inst && writes_rd && !is_mret && !harness_ebreak;
+  assign wb_wen = complete_inst && writes_rd && !is_mret;
   assign lsu_wen = complete_inst && mem_wen;
 
   assign imm_data = (imm_sel == `NPC_IMM_S) ? imm_s :
@@ -283,11 +279,7 @@ module Core #(
       halted <= 1'b0;
       trap_status <= `NPC_STATUS_RUNNING;
     end else if (!halted) begin
-      if (harness_ebreak && complete_inst) begin
-        halted <= 1'b1;
-        trap_status <= ebreak_status;
-        npc_trap({30'd0, ebreak_status});
-      end else if (bad_without_vector) begin
+      if (bad_without_vector) begin
         halted <= 1'b1;
         trap_status <= `NPC_STATUS_BAD;
       end else if (precise_trap) begin

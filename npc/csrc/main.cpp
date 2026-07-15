@@ -175,13 +175,21 @@ public:
 
       if (difftest_.enabled()) {
         auto regs = debug_regs(top_);
+        bool both_ebreak = false;
         if (!difftest_.step(ev, regs.data(), top_.debug_pc, top_.debug_mstatus,
-                            top_.debug_mtvec, top_.debug_mepc, top_.debug_mcause)) {
+                            top_.debug_mtvec, top_.debug_mepc, top_.debug_mcause,
+                            &both_ebreak)) {
           difftest_.dump_last_ref(8);
           return {"bad", "difftest_mismatch"};
         }
+        if (both_ebreak) {
+          return debug_reg(top_, 10) == 0 ? RunResult{"good", "good_trap"} : RunResult{"bad", "bad_trap"};
+        }
       }
 
+      if (!difftest_.enabled() && ev.inst == 0x00100073u) {
+        return debug_reg(top_, 10) == 0 ? RunResult{"good", "good_trap"} : RunResult{"bad", "bad_trap"};
+      }
       if (ev.exception) return {"bad", "illegal_inst"};
       if (top_.debug_halted) return finish_reason(false);
       if (breakpoint_hit(top_.debug_pc)) {
@@ -560,7 +568,9 @@ int main(int argc, char **argv) {
     result.status = "bad";
     result.reason = "check_failed";
   }
-  uint32_t trap_status = result.status == "limit" ? NPC_STATUS_LIMIT : top->debug_trap_status;
+  uint32_t trap_status = result.status == "limit" ? NPC_STATUS_LIMIT :
+                         result.reason == "good_trap" ? NPC_STATUS_GOOD :
+                         result.reason == "bad_trap" ? NPC_STATUS_BAD : top->debug_trap_status;
   std::printf("NPC_RESULT status=%s reason=%s cycles=%llu insts=%llu pc=0x%08x halted=%u limit=%llu x1=0x%08x a0=0x%08x trap=%u\n",
               result.status.c_str(),
               result.reason.c_str(),

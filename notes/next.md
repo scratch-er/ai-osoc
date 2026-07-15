@@ -359,16 +359,100 @@ Known P5-S1 caveats:
 - NEMU `paddr.c` still contains the temporary NPC UART/CLINT fallback aliases from Phase 4. They should move into device/MMIO or platform-specific code in the next MMIO replay/device cleanup slice.
 - `paddr_memcpy_to_guest()` currently requires a copied range to fit within one region. That is fine for current binary loading and DiffTest image injection, but future ELF/multi-region loading should copy chunk-by-chunk across loadable regions.
 
+P4-S8 / RT-Thread NPC DiffTest follow-up completed work:
+
+- Committed the NEMU memory-region refactor as:
+
+  ```text
+  a007e71 Refactor NEMU physical memory regions
+  ```
+
+- Re-ran RT-Thread on NPC with NEMU DiffTest and reproduced the first blocker: RT-Thread allocated up to the AM-declared 128 MiB NPC heap end (`0x88000000`), while the NPC simulation memory was only 16 MiB. The first failure was an out-of-bounds write near `0x87fffff0`, followed by a NEMU reference MMIO/out-of-bound abort.
+- Fixed the NPC simulation memory size in `npc/csrc/memory.h` from 16 MiB to 128 MiB so it matches `abstract-machine/am/src/riscv/npc/trm.c` (`PMEM_SIZE = 128 * 1024 * 1024`) and the NEMU reference memory size used by the current `.config` after local config sync.
+- Added an RT-Thread BSP shell command `halt` in `rt-thread-am/bsp/abstract-machine/src/halt.c`. It executes `ebreak` with `a0 = 0`.
+- Appended `halt` to the fixed UART input script in `rt-thread-am/bsp/abstract-machine/src/uart.c`, after `utest_list`.
+- Updated NPC harness/DiffTest termination semantics for `ebreak`: the RTL still treats `ebreak` as a physical breakpoint/trap, while the C++ harness terminates simulation when the retired DUT and REF instructions are both `ebreak` at the same PC. If only one side retires `ebreak`, or the PCs differ, DiffTest reports `ebreak_mismatch`.
+- Validated RT-Thread on NPC with NEMU event DiffTest. The run reaches the RT-Thread banner, shell command output, `memtrace`, `memcheck`, `utest_list`, then `halt`, and exits with `NPC_RESULT status=good reason=good_trap`.
+
+Validated RT-Thread NPC DiffTest command:
+
+```sh
+make ARCH=riscv32e-npc \
+  AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-elf- \
+  NPC_MAX_CYCLES=5000000 \
+  NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so \
+  run
+```
+
+Run it from:
+
+```sh
+/Users/venti/Workspace/ai-ysyx/rt-thread-am/bsp/abstract-machine
+```
+
+Expected result:
+
+- The command exits zero.
+- Treat the run as successful if output contains:
+  - `NPC_DIFFTEST status=on`
+  - RT-Thread banner (`Thread Operating System`)
+  - `Hello RISC-V!`
+  - `msh />help`
+  - `msh />utest_list`
+  - `msh />halt`
+  - `NEMU_RESULT status=good`
+  - final `NPC_RESULT status=good reason=good_trap`
+- Treat it as failed if output contains `NPC_DIFFTEST status=fail`, `difftest_mismatch`, `ebreak_mismatch`, assertion failures, host aborts, out-of-bounds memory messages, or `NPC_RESULT status=limit`.
+
+Additional validation after the memory-size change:
+
+1. NEMU `hello` smoke passed with 128 MiB memory:
+
+   ```sh
+   make -C am-kernels/kernels/hello ARCH=riscv32-nemu \
+     AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+     NEMU_HOME=/Users/venti/Workspace/ai-ysyx/nemu \
+     CROSS_COMPILE=riscv64-elf- NEMU_MAX_INSTS=200000 run
+   ```
+
+   Result included:
+
+   ```text
+   NEMU_RESULT status=good state=2 halt_pc=0x800000c4 halt_ret=0 insts=352 limit=200000
+   ```
+
+2. NPC `hello` with NEMU DiffTest passed:
+
+   ```sh
+   make -C am-kernels/kernels/hello ARCH=riscv32e-npc \
+     AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+     CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=200000 \
+     NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+   ```
+
+   Result included:
+
+   ```text
+   NPC_RESULT status=good reason=good_trap cycles=465 insts=465 pc=0x800000c4 halted=1 limit=200000 x1=0x800000c0 a0=0x00000000 trap=1
+   ```
+
+3. Full NPC directed regression passed by Makefile expectations:
+
+   ```sh
+   make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest
+   ```
+
 Next work:
 
-Continue with `P5-S2: device-aware MMIO cleanup and replay groundwork` before returning to NPC RT-Thread if DiffTest/device-map mismatch remains the limiting issue.
+Continue with `P5-S2: device-aware MMIO cleanup and replay groundwork`.
 
 Concrete P5-S2 plan:
 
 1. Move the temporary NPC UART/CLINT address handling out of generic `paddr.c` into a platform/device helper or proper MMIO maps.
 2. Define the ordered MMIO replay contract for UART/timer/CLINT reads/writes without replaying all RAM bus transactions.
 3. Add directed tests for non-writable/loadable region behavior, either by temporarily selecting a scheme with a ROM-like region or by a narrow unit-style memory test.
-4. Re-run NEMU `hello`, NPC `hello` with DiffTest, NPC directed regression, and the 35 `cpu-tests` sweep.
+4. Re-run NEMU `hello`, NPC `hello` with DiffTest, RT-Thread NPC DiffTest, NPC directed regression, and the 35 `cpu-tests` sweep.
 
 Relevant files:
 
@@ -383,3 +467,4 @@ Relevant files:
 - `nemu/src/device/io/map.c`
 - `npc/csrc/difftest.cpp`
 - `npc/csrc/memory.cpp`
+- `npc/csrc/memory.h`
