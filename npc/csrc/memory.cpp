@@ -44,6 +44,10 @@ bool Memory::contains(uint32_t addr, uint32_t len) const {
   return off <= data_size_ && len <= data_size_ - off;
 }
 
+bool Memory::access_ok(uint32_t addr) const {
+  return contains(addr, 4) || addr == UART_BASE || (addr >= CLINT_BASE && addr < CLINT_END);
+}
+
 bool Memory::load_image(const std::string &path) {
   return load_image_at(path, base_addr_);
 }
@@ -172,6 +176,14 @@ extern "C" uint32_t pmem_read(uint32_t addr) {
     return 0;
   }
   return pmem->read32(addr);
+}
+
+extern "C" uint32_t pmem_access_ok(uint32_t addr) {
+  if (pmem == nullptr) {
+    std::fprintf(stderr, "pmem_access_ok called before memory is initialized\n");
+    return 0;
+  }
+  return pmem->access_ok(addr) ? 1u : 0u;
 }
 
 extern "C" void pmem_write(uint32_t addr, uint32_t data, uint8_t wmask) {

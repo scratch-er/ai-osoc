@@ -15,6 +15,7 @@ public:
   uint32_t base() const { return base_addr_; }
   uint32_t size() const { return static_cast<uint32_t>(data_size_); }
   bool contains(uint32_t addr, uint32_t len) const;
+  bool access_ok(uint32_t addr) const;
   void set_trace(bool enable) { trace_ = enable; }
   void set_time(uint64_t time) { time_ = time; }
   void copy_to(void *dst, uint32_t addr, uint32_t len) const;
@@ -36,5 +37,6 @@ private:
 void set_pmem(Memory *memory);
 
 extern "C" uint32_t pmem_read(uint32_t addr);
+extern "C" uint32_t pmem_access_ok(uint32_t addr);
 
 #endif

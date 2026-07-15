@@ -68,6 +68,7 @@ module Core #(
   reg [1:0]  trap_status;
   reg [31:0] inst_q;
   reg        inst_valid;
+  reg        inst_error;
 
   wire [31:0] fetch_pc = reset ? reset_vector : pc;
   wire [31:0] inst = inst_q;
@@ -112,6 +113,7 @@ module Core #(
   wire [31:0] ifu_bus_addr;
   wire        ifu_bus_ready;
   wire [31:0] ifu_bus_rdata;
+  wire        ifu_bus_error;
   wire [31:0] ifu_inst_unused;
   wire [31:0] lsu_addr;
   wire [31:0] lsu_rdata;
@@ -125,6 +127,7 @@ module Core #(
   wire [3:0]  lsu_bus_wmask;
   wire        lsu_bus_ready;
   wire [31:0] lsu_bus_rdata;
+  wire        lsu_bus_error;
   wire        axi_req_valid;
   wire        axi_req_write;
   wire [31:0] axi_req_addr;
@@ -132,6 +135,7 @@ module Core #(
   wire [3:0]  axi_req_wmask;
   wire        axi_req_ready;
   wire [31:0] axi_req_rdata;
+  wire        axi_req_error;
   wire [31:0] csr_rdata;
   wire [31:0] mtvec;
   wire [31:0] mepc;
@@ -152,12 +156,15 @@ module Core #(
   wire        jal_target_misaligned;
   wire        jalr_target_misaligned;
   wire        pc_exception;
+  wire        mem_access_fault;
   wire [31:0] exception_cause;
   wire        is_ecall = sys_cmd == `NPC_SYS_ECALL;
   wire        is_ebreak = sys_cmd == `NPC_SYS_EBREAK;
   wire        is_mret = sys_cmd == `NPC_SYS_MRET;
+  wire        base_trap_request;
   wire        trap_request;
   wire        precise_trap;
+  wire        can_complete_no_mem_fault;
   wire        complete_inst;
   wire        mem_access;
   wire        mem_ready;
@@ -183,21 +190,27 @@ module Core #(
   assign jal_target_misaligned = is_jal && jal_target[1:0] != 2'b00;
   assign jalr_target_misaligned = is_jalr && jalr_target[1:0] != 2'b00;
   assign pc_exception = decode_legal && (branch_target_misaligned || jal_target_misaligned || jalr_target_misaligned);
-  assign exception_cause = !decode_legal ? {27'd0, `NPC_EXC_ILLEGAL_INST} :
+  assign base_trap_request = inst_error || !decode_legal || pc_exception || mem_misaligned || is_ecall || is_ebreak;
+  assign can_complete_no_mem_fault = inst_valid && !inst_error && decode_legal && !mem_misaligned && !pc_exception && !is_ecall && !(base_trap_request && mtvec != 32'd0);
+  assign mem_access = can_complete_no_mem_fault && (mem_ren || mem_wen);
+  assign mem_access_fault = mem_access && lsu_bus_ready && lsu_bus_error;
+  assign trap_request = base_trap_request || mem_access_fault;
+  assign precise_trap = trap_request && mtvec != 32'd0;
+  assign bad_without_vector = trap_request && mtvec == 32'd0;
+  assign complete_inst = can_complete_no_mem_fault && !mem_access_fault;
+  assign exception_cause = inst_error ? {27'd0, `NPC_EXC_INST_ACCESS_FAULT} :
+                           !decode_legal ? {27'd0, `NPC_EXC_ILLEGAL_INST} :
                            pc_exception ? {27'd0, `NPC_EXC_INST_ADDR_MISALIGNED} :
                            (mem_ren && mem_misaligned) ? {27'd0, `NPC_EXC_LOAD_ADDR_MISALIGNED} :
                            (mem_wen && mem_misaligned) ? {27'd0, `NPC_EXC_STORE_ADDR_MISALIGNED} :
+                           (mem_ren && mem_access_fault) ? {27'd0, `NPC_EXC_LOAD_ACCESS_FAULT} :
+                           (mem_wen && mem_access_fault) ? {27'd0, `NPC_EXC_STORE_ACCESS_FAULT} :
                            is_ecall ? {27'd0, `NPC_EXC_ECALL_M} :
                            is_ebreak ? {27'd0, `NPC_EXC_BREAKPOINT} : 32'd0;
-  assign trap_request = !decode_legal || pc_exception || mem_misaligned || is_ecall || is_ebreak;
-  assign precise_trap = trap_request && mtvec != 32'd0;
-  assign bad_without_vector = trap_request && mtvec == 32'd0;
-  assign complete_inst = inst_valid && decode_legal && !mem_misaligned && !pc_exception && !is_ecall && !precise_trap;
-  assign mem_access = complete_inst && (mem_ren || mem_wen);
   assign mem_ready = !mem_access || lsu_bus_ready;
   assign retire_ready = !reset && !halted && inst_valid && mem_ready;
   assign wb_wen = complete_inst && mem_ready && writes_rd && !is_mret;
-  assign lsu_wen = complete_inst && mem_wen;
+  assign lsu_wen = can_complete_no_mem_fault && mem_wen;
 
   assign imm_data = (imm_sel == `NPC_IMM_S) ? imm_s :
                     (imm_sel == `NPC_IMM_B) ? imm_b :
@@ -222,7 +235,7 @@ module Core #(
   assign commit_wen = wb_wen && rd != 5'd0;
   assign commit_rd = rd;
   assign commit_wdata = final_wb_data;
-  assign commit_exception = bad_without_vector;
+  assign commit_exception = bad_without_vector || inst_error || mem_access_fault;
   assign commit_cause = exception_cause;
   assign commit_mem_wen = retire_ready && lsu_wen;
   assign commit_mem_addr = lsu_write_addr;
@@ -296,7 +309,7 @@ module Core #(
   );
 
   Lsu u_lsu (
-    .ren(!reset && !halted && complete_inst && mem_ren),
+    .ren(!reset && !halted && can_complete_no_mem_fault && mem_ren),
     .wen(!reset && !halted && lsu_wen),
     .size(mem_size),
     .load_unsigned(mem_unsigned),
@@ -320,6 +333,7 @@ module Core #(
     .ifu_addr(ifu_bus_addr),
     .ifu_ready(ifu_bus_ready),
     .ifu_rdata(ifu_bus_rdata),
+    .ifu_error(ifu_bus_error),
     .lsu_valid(lsu_bus_valid),
     .lsu_write(lsu_bus_write),
     .lsu_addr(lsu_bus_addr),
@@ -327,13 +341,15 @@ module Core #(
     .lsu_wmask(lsu_bus_wmask),
     .lsu_ready(lsu_bus_ready),
     .lsu_rdata(lsu_bus_rdata),
+    .lsu_error(lsu_bus_error),
     .bus_valid(axi_req_valid),
     .bus_write(axi_req_write),
     .bus_addr(axi_req_addr),
     .bus_wdata(axi_req_wdata),
     .bus_wmask(axi_req_wmask),
     .bus_ready(axi_req_ready),
-    .bus_rdata(axi_req_rdata)
+    .bus_rdata(axi_req_rdata),
+    .bus_error(axi_req_error)
   );
 
   AxiMaster u_axi_master (
@@ -346,6 +362,7 @@ module Core #(
     .req_wmask(axi_req_wmask),
     .req_ready(axi_req_ready),
     .req_rdata(axi_req_rdata),
+    .req_error(axi_req_error),
     .axi_awready(axi_awready),
     .axi_awvalid(axi_awvalid),
     .axi_awaddr(axi_awaddr),
@@ -409,10 +426,12 @@ module Core #(
       trap_status <= `NPC_STATUS_RUNNING;
       inst_q <= 32'd0;
       inst_valid <= 1'b0;
+      inst_error <= 1'b0;
     end else begin
       if (!inst_valid && ifu_bus_ready) begin
         inst_q <= ifu_bus_rdata;
         inst_valid <= 1'b1;
+        inst_error <= ifu_bus_error;
       end
       if (!halted && retire_ready) begin
         inst_valid <= 1'b0;

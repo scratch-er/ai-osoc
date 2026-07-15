@@ -33,11 +33,14 @@ module LocalAxiSlave (
 );
 
   import "DPI-C" function int unsigned pmem_read(input int unsigned addr);
+  import "DPI-C" function int unsigned pmem_access_ok(input int unsigned addr);
   import "DPI-C" function void pmem_write(input int unsigned addr, input int unsigned data, input byte wmask);
 
   reg        bvalid_q;
+  reg [1:0]  bresp_q;
   reg [3:0]  bid_q;
   reg        rvalid_q;
+  reg [1:0]  rresp_q;
   reg [31:0] rdata_q;
   reg [3:0]  rid_q;
   reg        have_aw;
@@ -55,12 +58,12 @@ module LocalAxiSlave (
   assign axi_awready = !reset && !bvalid_q && !have_aw;
   assign axi_wready = !reset && !bvalid_q && have_write_addr;
   assign axi_bvalid = bvalid_q;
-  assign axi_bresp = 2'b00;
+  assign axi_bresp = bresp_q;
   assign axi_bid = bid_q;
 
   assign axi_arready = !reset && !rvalid_q;
   assign axi_rvalid = rvalid_q;
-  assign axi_rresp = 2'b00;
+  assign axi_rresp = rresp_q;
   assign axi_rdata = rdata_q;
   assign axi_rlast = 1'b1;
   assign axi_rid = rid_q;
@@ -68,8 +71,10 @@ module LocalAxiSlave (
   always @(posedge clock) begin
     if (reset) begin
       bvalid_q <= 1'b0;
+      bresp_q <= 2'b00;
       bid_q <= 4'd0;
       rvalid_q <= 1'b0;
+      rresp_q <= 2'b00;
       rdata_q <= 32'd0;
       rid_q <= 4'd0;
       have_aw <= 1'b0;
@@ -84,7 +89,13 @@ module LocalAxiSlave (
       end
 
       if (read_fire) begin
-        rdata_q <= pmem_read(axi_araddr);
+        if (pmem_access_ok(axi_araddr) != 0) begin
+          rdata_q <= pmem_read(axi_araddr);
+          rresp_q <= 2'b00;
+        end else begin
+          rdata_q <= 32'd0;
+          rresp_q <= 2'b10;
+        end
         rid_q <= axi_arid;
         rvalid_q <= 1'b1;
       end
@@ -96,7 +107,12 @@ module LocalAxiSlave (
       end
 
       if (write_data_fire) begin
-        pmem_write(write_addr, axi_wdata, {4'd0, axi_wstrb});
+        if (pmem_access_ok(write_addr) != 0) begin
+          pmem_write(write_addr, axi_wdata, {4'd0, axi_wstrb});
+          bresp_q <= 2'b00;
+        end else begin
+          bresp_q <= 2'b10;
+        end
         bid_q <= write_id;
         bvalid_q <= 1'b1;
         have_aw <= 1'b0;

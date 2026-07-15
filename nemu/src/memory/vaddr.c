@@ -16,6 +16,10 @@
 #include <isa.h>
 #include <memory/paddr.h>
 
+bool vaddr_access_ok(vaddr_t addr, int len) {
+  return paddr_is_backed(addr, len) || addr == 0x10000000u || (addr >= 0x02000000u && addr + len <= 0x0200c000u);
+}
+
 word_t vaddr_ifetch(vaddr_t addr, int len) {
   return paddr_read(addr, len);
 }

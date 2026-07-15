@@ -15,7 +15,7 @@ ifeq ($(TRACE),1)
 VERILATOR_FLAGS += --trace
 endif
 
-.PHONY: all run smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-axi-local test-mem-latency test-rv32e-illegal test-csr-trap test-debug test-difftest clean
+.PHONY: all run smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-axi-local test-mem-latency test-access-fault test-rv32e-illegal test-csr-trap test-debug test-difftest clean
 
 all: $(BIN)
 
@@ -68,6 +68,20 @@ test-axi-local: $(BIN)
 	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap cycles=24 insts=5 pc=0x00000110 halted=1 limit=40 x1=0x0000002a a0=0x00000000 trap=1' >/dev/null
 
 test-mem-latency: test-axi-local
+
+test-access-fault: $(BIN)
+	@out="$$($(BIN) --image tests/bin/inst-access-fault.bin --reset-pc 0x80000000 --max-cycles 40 --expect-x1 0x1 --difftest-ref $(REF_SO) --dump-trace 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'CAUSE=1' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap' >/dev/null; \
+	out="$$($(BIN) --image tests/bin/load-access-fault.bin --reset-pc 0x80000000 --max-cycles 40 --expect-x1 0x5 --difftest-ref $(REF_SO) --dump-trace 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'CAUSE=5' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap' >/dev/null; \
+	out="$$($(BIN) --image tests/bin/store-access-fault.bin --reset-pc 0x80000000 --max-cycles 40 --expect-x1 0x7 --difftest-ref $(REF_SO) --dump-trace 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'CAUSE=7' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap' >/dev/null
 
 test-mem-size: $(BIN)
 	@out="$$($(BIN) --image tests/bin/byte-half-memory.bin --reset-pc 0x100 --max-cycles 128 --expect-x1 0xffff7f01 2>&1)"; \

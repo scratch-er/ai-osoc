@@ -22,6 +22,8 @@ typedef struct Decode {
   vaddr_t pc;
   vaddr_t snpc; // static next pc
   vaddr_t dnpc; // dynamic next pc
+  bool exception;
+  word_t exception_cause;
   ISADecodeInfo isa;
 } Decode;
 

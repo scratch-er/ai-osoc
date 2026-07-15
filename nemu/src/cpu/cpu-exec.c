@@ -63,7 +63,13 @@ static CommitEvent make_commit_event(Decode *s, vaddr_t dnpc) {
   if (has_wb && rd < ARRLEN(cpu.gpr)) {
     ev.rd_value = cpu.gpr[rd];
   }
-  if (nemu_state.state == NEMU_ABORT) {
+  if (s->exception) {
+    ev.exception = 1;
+    ev.cause = s->exception_cause;
+    ev.has_wb = false;
+    ev.rd = 0;
+    ev.rd_value = 0;
+  } else if (nemu_state.state == NEMU_ABORT) {
     ev.exception = 1;
     ev.cause = nemu_state.state;
   }
@@ -77,6 +83,8 @@ static void difftest_after_commit(Decode *_this, vaddr_t dnpc) {
 static void exec_once(Decode *s, vaddr_t pc) {
   s->pc = pc;
   s->snpc = pc;
+  s->exception = false;
+  s->exception_cause = 0;
   isa_exec_once(s);
   cpu.pc = s->dnpc;
 }

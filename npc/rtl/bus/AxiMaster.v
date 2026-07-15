@@ -8,6 +8,7 @@ module AxiMaster (
   input  [3:0]  req_wmask,
   output        req_ready,
   output [31:0] req_rdata,
+  output        req_error,
 
   input         axi_awready,
   output        axi_awvalid,
@@ -60,10 +61,11 @@ module AxiMaster (
   wire write_done = state == S_WRITE_RESP && axi_bvalid;
   wire aw_fire = axi_awvalid && axi_awready;
   wire w_fire = axi_wvalid && axi_wready;
-  wire unused = |{axi_bresp, axi_bid, axi_rresp, axi_rlast, axi_rid};
+  wire unused = |{axi_bid, axi_rlast, axi_rid};
 
   assign req_ready = read_done || write_done;
   assign req_rdata = read_done ? axi_rdata : rdata_q;
+  assign req_error = (read_done && axi_rresp != 2'b00) || (write_done && axi_bresp != 2'b00);
 
   assign axi_awvalid = state == S_WRITE_REQ && !aw_done;
   assign axi_awaddr = addr_q;

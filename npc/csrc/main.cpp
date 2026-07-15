@@ -231,7 +231,7 @@ public:
       if (!difftest_.enabled() && ev.inst == 0x00100073u) {
         return debug_reg(top_, 10) == 0 ? RunResult{"good", "good_trap"} : RunResult{"bad", "bad_trap"};
       }
-      if (ev.exception) return {"bad", "illegal_inst"};
+      if (ev.exception && top_.debug_halted) return {"bad", "illegal_inst"};
       if (top_.debug_halted) return finish_reason(false);
       if (breakpoint_hit(top_.debug_pc)) {
         std::printf("NPC_BREAK_HIT pc=0x%08x insts=%llu cycles=%llu\n",
