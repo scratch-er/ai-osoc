@@ -10,7 +10,7 @@ Current state:
 - Phase 6 (`Physical Built-in CLINT, UART Path, and RT-Thread Stability`) is closed and committed:
   - `8170098 Implement physical CLINT`
   - `84d258d Validate physical CLINT workloads`
-- Phase 7 (`Instruction Cache and fence.i`) is complete through `P7-S1: Implement icache, fence.i, counters, and smoke tests`.
+- Phase 7 (`Instruction Cache and fence.i`) is complete through `P7-S2: Full regression and bug fixing`.
 - NPC implementation style is **Verilog**.
 - Repository status before Phase 2 already had untracked `.DS_Store`, `activate`, and top-level `.gitignore`; leave them alone unless the user explicitly asks. Current `git status --short` still shows untracked top-level `.gitignore`.
 - Top-level `build/` contains generated AM/NPC images, logs, and the ignored temporary `build/sonnet-libc-src` clone used as the Sonnet libc source reference; do not commit generated artifacts unless explicitly requested.
@@ -237,18 +237,128 @@ make -C am-kernels/kernels/hello ARCH=riscv32e-npc \
 
 Result: passed. Output contained `Hello, AbstractMachine!`, `mainargs = ''.`, `NEMU_RESULT status=good`, and `NPC_RESULT status=good reason=good_trap cycles=2116 insts=465 ...`. Representative counter line: `NPC_ICACHE accesses=465 hits=297 misses=168 miss_wait_cycles=1008 refill_beats=672 hit_rate_x1000=638 amat_x1000=3167`.
 
-Known caveats / follow-up for P7-S2:
+## Phase 7 Session 2 status
 
-- Full 35-test `cpu-tests`, bounded timer/CTE/thread smokes, and RT-Thread regression have not yet been rerun after icache; that is the planned scope of P7-S2.
-- Counter definitions are simple RTL counters: an access is counted per accepted IFU fetch request; `miss_wait_cycles` counts cycles while refill is outstanding; `refill_beats` should equal `misses * 4` for successful local-memory refills.
-- `NPC_RESULT` remains semantically stable but exact cycle counts changed because hits are faster and misses refill four beats.
+`P7-S2: Full regression and bug fixing` is complete. No RTL/C++ fixes were required during this session; the full practical regression suite passed or reached the same expected bounded states documented before.
+
+P7-S2 validation completed:
+
+1. NPC directed regression including icache/fence/access-fault/CLINT:
+
+```sh
+make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest test-clint test-icache test-fencei test-access-fault
+```
+
+Result: passed.
+
+Representative results/counters:
+
+- `test-clint`: `NPC_RESULT status=good reason=good_trap cycles=68 insts=19 pc=0x80000048 ...`; `NPC_ICACHE accesses=19 hits=14 misses=5 miss_wait_cycles=30 refill_beats=20 hit_rate_x1000=736 amat_x1000=2578`.
+- `test-icache`: `NPC_RESULT status=good reason=good_trap cycles=50 insts=19 pc=0x20000010 ...`; `NPC_ICACHE accesses=19 hits=17 misses=2 miss_wait_cycles=12 refill_beats=8 hit_rate_x1000=894 amat_x1000=1631`.
+- `test-fencei`: `NPC_RESULT status=good reason=good_trap cycles=50 insts=9 pc=0x80000008 ...`; `NPC_ICACHE accesses=9 hits=4 misses=5 miss_wait_cycles=30 refill_beats=20 hit_rate_x1000=444 amat_x1000=4333`.
+- Access-fault subtests passed with NEMU event DiffTest; instruction-access-fault still uses the P7-S1 `--max-cycles 64` allowance.
+
+2. Full 35-test NPC `cpu-tests` sweep with NEMU event DiffTest:
+
+```sh
+ROOT=/Users/venti/Workspace/ai-ysyx
+TESTDIR="$ROOT/am-kernels/tests/cpu-tests/tests"
+REF="$ROOT/nemu/build/riscv32-nemu-interpreter-so"
+for t in $(cd "$TESTDIR" && ls *.c | sed 's/\.c$//' | sort); do
+  tmp=$(mktemp /tmp/am-$t.XXXXXX.mk) || exit 1
+  printf 'NAME = %s\nSRCS = %s/%s.c\nINC_PATH += %s/am-kernels/tests/cpu-tests/include\ninclude %s/abstract-machine/Makefile\n' "$t" "$TESTDIR" "$t" "$ROOT" "$ROOT" > "$tmp"
+  make -f "$tmp" ARCH=riscv32e-npc AM_HOME="$ROOT/abstract-machine" CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=8000000 NPC_DIFFTEST_REF="$REF" run >"/tmp/p7-s2-cputest-$t.log" 2>&1
+  status=$?
+  rm -f "$tmp"
+  if [ $status -ne 0 ]; then echo "FAILED $t"; tail -100 "/tmp/p7-s2-cputest-$t.log"; exit $status; fi
+  icache=$(grep 'NPC_ICACHE' "/tmp/p7-s2-cputest-$t.log" | tail -1)
+  result=$(grep 'NPC_RESULT' "/tmp/p7-s2-cputest-$t.log" | tail -1)
+  echo "PASS $t | $result | $icache"
+done
+```
+
+Result: all 35 tests passed:
+
+`add`, `add-longlong`, `bit`, `bubble-sort`, `crc32`, `div`, `dummy`, `fact`, `fib`, `goldbach`, `hello-str`, `if-else`, `leap-year`, `load-store`, `matrix-mul`, `max`, `mersenne`, `min3`, `mov-c`, `movsx`, `mul-longlong`, `narcissistic`, `pascal`, `prime`, `quick-sort`, `recursion`, `select-sort`, `shift`, `string`, `sub-longlong`, `sum`, `switch`, `to-lower-case`, `unalign`, `wanshu`.
+
+Representative counter extremes from this sweep:
+
+- `sum`: `NPC_ICACHE accesses=528 hits=517 misses=11 miss_wait_cycles=66 refill_beats=44 hit_rate_x1000=979 amat_x1000=1125`.
+- `matrix-mul`: `NPC_RESULT status=good reason=good_trap cycles=545234 insts=132126 ...`; `NPC_ICACHE accesses=132126 hits=87348 misses=44778 miss_wait_cycles=268668 refill_beats=179112 hit_rate_x1000=661 amat_x1000=3033`.
+- `string`: `NPC_ICACHE accesses=1449 hits=1379 misses=70 miss_wait_cycles=420 refill_beats=280 hit_rate_x1000=951 amat_x1000=1289`.
+
+3. NPC `hello` with NEMU event DiffTest:
+
+```sh
+make -C am-kernels/kernels/hello ARCH=riscv32e-npc \
+  AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=2000000 \
+  NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+Result: passed. Output contained `Hello, AbstractMachine!`, `mainargs = ''.`, `NEMU_RESULT status=good`, and `NPC_RESULT status=good reason=good_trap cycles=2116 insts=465 pc=0x800000c4 ...`. Counter line: `NPC_ICACHE accesses=465 hits=297 misses=168 miss_wait_cycles=1008 refill_beats=672 hit_rate_x1000=638 amat_x1000=3167`.
+
+4. AM devscan/timer bounded smoke:
+
+```sh
+make -C am-kernels/tests/am-tests ARCH=riscv32e-npc \
+  AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=80000000 mainargs=d run
+```
+
+Result: expected bounded run, not a failure. It printed `heap = ...` and `Input device test skipped.`, then reached `NPC_RESULT status=limit reason=cycle_limit cycles=80000000 insts=25000215 pc=0x80000a5c ...` inside the timer delay loop. Counter line: `NPC_ICACHE accesses=25000215 hits=24998806 misses=1409 miss_wait_cycles=8454 refill_beats=5636 hit_rate_x1000=999 amat_x1000=1000`.
+
+5. Bounded CTE/yield smoke with NEMU event DiffTest:
+
+```sh
+make -C am-kernels/kernels/yield-os ARCH=riscv32e-npc \
+  AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=12000000 \
+  NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+Result: expected bounded run. Output reached `ABABABAB` before `NPC_RESULT status=limit reason=cycle_limit cycles=12000000 insts=3749488 ...`; CSR state still showed synchronous yield/ecall trap context (`mcause=0x0000000b`). Counter line: `NPC_ICACHE accesses=3749488 hits=3749151 misses=337 miss_wait_cycles=2022 refill_beats=1348 hit_rate_x1000=999 amat_x1000=1000`.
+
+6. Bounded thread smoke with NEMU event DiffTest:
+
+```sh
+make -C am-kernels/kernels/thread-os ARCH=riscv32e-npc \
+  AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=12000000 \
+  NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+Result: expected bounded run. Output printed eight ordered `Thread-B on CPU #0` lines before `NPC_RESULT status=limit reason=cycle_limit cycles=12000000 insts=3746560 ...`; CSR state still showed synchronous ecall/yield trap context (`mcause=0x0000000b`). Counter line: `NPC_ICACHE accesses=3746560 hits=3744200 misses=2360 miss_wait_cycles=14160 refill_beats=9440 hit_rate_x1000=999 amat_x1000=1003`.
+
+7. NPC RT-Thread with NEMU event DiffTest:
+
+```sh
+make -C rt-thread-am/bsp/abstract-machine ARCH=riscv32e-npc \
+  AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=12000000 \
+  NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+Result: passed through scripted shell `halt`. Output contained the RT-Thread banner, `Hello RISC-V!`, shell commands through `msh />halt`, `NEMU_RESULT status=good state=2 halt_pc=0x8000022c halt_ret=0 insts=511954 limit=0`, and `NPC_RESULT status=good reason=good_trap cycles=1846844 insts=511954 ...`. Counter line: `NPC_ICACHE accesses=511954 hits=424044 misses=87910 miss_wait_cycles=527460 refill_beats=351640 hit_rate_x1000=828 amat_x1000=2030`.
+
+Interpretation / caveats:
+
+- P7-S2 found no functional icache, burst, `fence.i`, counter, CLINT replay, or UART-ordering regression.
+- The current user-facing command reference for cache counters is `npc/README.md` section `Instruction-cache counters`. Use the printed `NPC_ICACHE` line; `hit_rate_x1000 / 10` is the percentage hit rate, and `amat_x1000 / 1000` is the reported AMAT in cycles.
+- Common-workload hit rates from P7-S2:
+  - `hello`: 63.8% (`hit_rate_x1000=638`).
+  - `rt-thread-am`: 82.8% (`hit_rate_x1000=828`).
+  - AM devscan/timer bounded loop: 99.9% (`hit_rate_x1000=999`).
+  - `yield-os` bounded: 99.9% (`hit_rate_x1000=999`).
+  - `thread-os` bounded: 99.9% (`hit_rate_x1000=999`).
+  - representative `cpu-tests`: `sum` 97.9%, `string` 95.1%, `bubble-sort` 90.2%, `matrix-mul` 66.1%, `crc32` 73.7%, `quick-sort` 74.7%.
+- For representative successful local-memory runs, `refill_beats == misses * 4`, matching the 16-byte / 4-instruction burst refill design.
+- `yield-os`, `thread-os`, and AM devscan/timer remain expected bounded runs. They retire more instructions and print more visible output within the same cycle budgets after icache because warm loops now hit in the icache.
+- `NPC_RESULT` exact cycle counts are not stable compatibility targets after icache; use semantic status, register/trap checks, DiffTest status, and `NPC_ICACHE` consistency instead.
+- This P7-S2 closeout commit includes `npc/README.md`, `notes/plan.md`, and `notes/next.md`. The pre-existing untracked top-level `.gitignore` is intentionally left alone.
 
 ## Next steps
 
-1. Start `P7-S2: Full regression and bug fixing`.
-2. Run the full practical regression suite with icache enabled:
-   - NPC directed regression including `test-icache`, `test-fencei`, `test-access-fault`, and `test-clint`.
-   - Full 35-test `cpu-tests` sweep with NEMU event DiffTest using the existing macOS `printf` Makefile workaround.
-   - `hello`, timer/devscan bounded smoke, bounded `yield-os`, bounded `thread-os`, and RT-Thread with DiffTest.
-3. Fix any icache, burst, `fence.i`, counter, CLINT replay, or UART-ordering regression found by the full sweep.
-4. Record exact P7-S2 commands, pass/fail results, representative `NPC_ICACHE` output, and remaining caveats.
+1. Start `P7-S3: Re-check Phase 7 exit criteria and plan Phase 8`.
+2. In P7-S3, explicitly confirm Phase 7 exit criteria.
+3. Produce the Phase 8 measurement/PPA baseline plan, including which workloads to measure, which counters to record, and the exact commands to use.

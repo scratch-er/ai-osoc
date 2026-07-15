@@ -2,9 +2,9 @@
 
 Initial Verilog NPC project for the RV32E_Zicsr core.
 
-Current status: Phase 6 is complete through `P6-S1: Physical CLINT design and implementation`. The RTL fetches instructions through DPI-C memory, executes RV32E `lui`, `auipc`, `jal`, `jalr`, B-type branches with target-alignment checks, `lb`/`lh`/`lw`/`lbu`/`lhu`, `sb`/`sh`/`sw`, the RV32E integer ALU/compare/shift subset, Zicsr for the required M-mode CSRs, `ecall`, architectural `ebreak`, `mret`, `wfi`, `fence`, and `fence.i`. It keeps `x0` immutable, implements precise trap entry when `mtvec` is nonzero, preserves the test-harness `ebreak` GOOD/BAD termination convention when `mtvec == 0`, emits committed UART writes to MMIO address `0x10000000` in retirement order, and implements a physical LSU-side CLINT `mtime`/`mtimeh` block at `0x0200bff8`/`0x0200bffc` that advances once per core clock.
+Current status: Phase 7 is complete through `P7-S2: Full regression and bug fixing`. The RTL fetches instructions through a 32-byte direct-mapped flip-flop instruction cache with 16-byte AXI burst refill and `fence.i` invalidation. It executes RV32E `lui`, `auipc`, `jal`, `jalr`, B-type branches with target-alignment checks, `lb`/`lh`/`lw`/`lbu`/`lhu`, `sb`/`sh`/`sw`, the RV32E integer ALU/compare/shift subset, Zicsr for the required M-mode CSRs, `ecall`, architectural `ebreak`, `mret`, `wfi`, `fence`, and `fence.i`. It keeps `x0` immutable, implements precise trap entry when `mtvec` is nonzero, preserves the test-harness `ebreak` GOOD/BAD termination convention when `mtvec == 0`, emits committed UART writes to MMIO address `0x10000000` in retirement order, and implements a physical LSU-side CLINT `mtime`/`mtimeh` block at `0x0200bff8`/`0x0200bffc` that advances once per core clock.
 
-The C++ Verilator harness now centers debugging around retired-instruction `CommitEvent`s. It has a scriptable command shell, bounded `last [n]` history, stable `NPC_RESULT`/`NPC_CSR` lines, and event-sequence DiffTest against the NEMU REF shared object when the REF exports `difftest_step_event()`.
+The C++ Verilator harness now centers debugging around retired-instruction `CommitEvent`s. It has a scriptable command shell, bounded `last [n]` history, stable `NPC_RESULT`/`NPC_CSR`/`NPC_ICACHE` lines, and event-sequence DiffTest against the NEMU REF shared object when the REF exports `difftest_step_event()`.
 
 ## Commands
 
@@ -14,7 +14,7 @@ Build:
 make -C npc
 ```
 
-Run the current regression set:
+Run the current directed regression set:
 
 ```sh
 make -C npc smoke
@@ -28,12 +28,15 @@ make -C npc test-csr-trap
 make -C npc test-debug
 make -C npc test-difftest
 make -C npc test-clint
+make -C npc test-icache
+make -C npc test-fencei
+make -C npc test-access-fault
 ```
 
-Or all current checks:
+Or all current directed checks:
 
 ```sh
-make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest test-clint
+make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest test-clint test-icache test-fencei test-access-fault
 ```
 
 Run with an optional image, reset PC, cycle limit, optional x1 check, and optional DiffTest REF:
@@ -49,21 +52,72 @@ make -f /tmp/am-dummy.mk ARCH=riscv32e-npc \
   AM_HOME=/path/to/abstract-machine CROSS_COMPILE=riscv64-elf- run
 ```
 
-Run AM `hello` through the committed UART MMIO path:
+Run AM `hello` through the committed UART MMIO path and optional NEMU event DiffTest:
 
 ```sh
 make -C am-kernels/kernels/hello ARCH=riscv32e-npc \
-  AM_HOME=/path/to/abstract-machine CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=200000 run
+  AM_HOME=/path/to/abstract-machine CROSS_COMPILE=riscv64-elf- \
+  NPC_MAX_CYCLES=2000000 \
+  NPC_DIFFTEST_REF=/path/to/nemu/build/riscv32-nemu-interpreter-so run
 ```
 
-Run the bounded AM timer/devscan smoke through the temporary retired-instruction timer:
+Run the bounded AM timer/devscan smoke through the physical CLINT timer:
 
 ```sh
 make -C am-kernels/tests/am-tests ARCH=riscv32e-npc \
-  AM_HOME=/path/to/abstract-machine CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=80000000 mainargs=d run
+  AM_HOME=/path/to/abstract-machine CROSS_COMPILE=riscv64-elf- \
+  NPC_MAX_CYCLES=80000000 mainargs=d run
 ```
 
-`abstract-machine/scripts/platform/npc.mk` builds `npc/build/npc` automatically and runs it with `--reset-pc 0x80000000`. Override `NPC_HOME`, `NPC_SIM`, `NPC_RESET_PC`, or `NPC_MAX_CYCLES` if needed.
+Run RT-Thread through NPC with NEMU event DiffTest:
+
+```sh
+make -C rt-thread-am/bsp/abstract-machine ARCH=riscv32e-npc \
+  AM_HOME=/path/to/abstract-machine CROSS_COMPILE=riscv64-elf- \
+  NPC_MAX_CYCLES=12000000 \
+  NPC_DIFFTEST_REF=/path/to/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+`abstract-machine/scripts/platform/npc.mk` builds `npc/build/npc` automatically and runs it with `--reset-pc 0x80000000`. Override `NPC_HOME`, `NPC_SIM`, `NPC_RESET_PC`, `NPC_MAX_CYCLES`, or `NPC_DIFFTEST_REF` if needed.
+
+## Instruction-cache counters
+
+Every simulator run prints one `NPC_ICACHE` line after `NPC_RESULT` and `NPC_CSR`:
+
+```text
+NPC_ICACHE accesses=465 hits=297 misses=168 miss_wait_cycles=1008 refill_beats=672 hit_rate_x1000=638 amat_x1000=3167
+```
+
+Use `hit_rate_x1000` for the cache hit rate. Divide it by 10 to get a percentage, or compute `hits / accesses * 100` directly. For the example above, `638` means `63.8%`.
+
+For an AM workload, capture the line with `grep`:
+
+```sh
+make -C am-kernels/kernels/hello ARCH=riscv32e-npc \
+  AM_HOME=/path/to/abstract-machine CROSS_COMPILE=riscv64-elf- \
+  NPC_MAX_CYCLES=2000000 \
+  NPC_DIFFTEST_REF=/path/to/nemu/build/riscv32-nemu-interpreter-so run \
+  2>&1 | tee /tmp/npc-hello.log | grep 'NPC_ICACHE'
+```
+
+For a direct NPC image:
+
+```sh
+make -C npc run ARGS="--image path/to/image.bin --reset-pc 0x80000000 --max-cycles 1000000" \
+  2>&1 | tee /tmp/npc-image.log | grep 'NPC_ICACHE'
+```
+
+Counter meanings:
+
+- `accesses`: accepted IFU fetch requests.
+- `hits`: fetch requests served by a valid matching icache line.
+- `misses`: fetch requests that trigger a line refill.
+- `miss_wait_cycles`: cycles spent waiting for refill completion.
+- `refill_beats`: AXI read data beats returned during refill; for successful local-memory refills this should be `misses * 4` because each line is 16 bytes / 4 instructions.
+- `hit_rate_x1000`: integer `hits * 1000 / accesses`.
+- `amat_x1000`: integer `(accesses + miss_wait_cycles) * 1000 / accesses`, in cycles scaled by 1000.
+
+Use these counters as performance diagnostics. Exact `NPC_RESULT cycles=...` values can change when the cache implementation changes; semantic status, DiffTest status, architectural checks, and counter consistency are the stable regression signals.
 
 ## Scriptable Shell
 

@@ -575,7 +575,7 @@ Sessions:
    - Exposed `mtime` low/high at `0x0200bff8`/`0x0200bffc` through the LSU-side CLINT path.
    - Implemented ignored no-error behavior for CLINT-window writes and unimplemented CLINT reads; ignored/reserved CLINT reads return zero.
 
-2. **P6-S2: Timer/DiffTest/workload validation** — done, awaiting user revision before commit.
+2. **P6-S2: Timer/DiffTest/workload validation** — done.
    - Strengthened `make -C npc test-clint` so the generated program performs the AM-style `mtimeh/mtime/mtimeh` read sequence, checks the high word remains stable in the short smoke, checks the low word advances, checks ignored CLINT-window writes/reads, and runs with NEMU event DiffTest replay.
    - Revalidated that committed CLINT reads are replayed from DUT RTL load data into the NEMU REF: the strengthened CLINT test passed with `NPC_DIFFTEST status=on`, `NEMU_RESULT status=good`, and `NPC_RESULT status=good`.
    - Re-ran NPC `hello`, AM timer/devscan smoke, bounded `yield-os`, bounded `thread-os`, full 35-test `cpu-tests` with DiffTest, and NPC `rt-thread-am` with DiffTest.
@@ -620,13 +620,16 @@ Sessions:
    - Smoke validation passed: `make -C npc test-icache test-fencei`, NPC directed smoke/regression subset including `test-clint`, `make -C npc test-access-fault`, and NPC `hello` with NEMU event DiffTest.
    - Exact-cycle Makefile checks were relaxed where icache timing changed cycles; semantic checks remain.
 
-2. **P7-S2: Full regression and bug fixing**
-   - Run the full practical regression suite and fix any bugs found.
-   - Cover NPC directed regression, including smoke/directed tests, memory-size/access-fault/CSR/DiffTest/CLINT tests.
-   - Run the full 35-test `cpu-tests` sweep with NEMU event DiffTest.
-   - Run AM/NPC workloads: `hello`, timer/devscan bounded smoke, bounded `yield-os`, bounded `thread-os`, and RT-Thread with DiffTest.
-   - Check that UART output is still ordered and not duplicated, CLINT DiffTest replay still works, access faults and misalignment behavior remain correct, and counters are internally consistent.
-   - Exit status: all previous Phase 6 functional tests pass, or expected bounded runs remain narrowly documented; no known icache correctness regression remains; counter output is stable enough for Phase 8.
+2. **P7-S2: Full regression and bug fixing** — done.
+   - Full practical regression with icache enabled completed without requiring RTL/C++ fixes.
+   - NPC directed regression passed, including smoke/directed tests, memory-size/misalignment/access-fault/CSR/DiffTest/CLINT tests, and focused `test-icache`/`test-fencei` checks.
+   - Full 35-test `cpu-tests` sweep passed with NEMU event DiffTest using the macOS `printf` temporary Makefile workaround.
+   - AM/NPC `hello` passed with NEMU event DiffTest and printed the expected output.
+   - AM devscan/timer remained an expected bounded run at the timer delay loop, now reaching `cycles=80000000 insts=25000215` with a near-perfect warm-loop icache hit rate.
+   - Bounded `yield-os` and `thread-os` remained expected bounded CTE/thread runs, with more visible output than P6 due to faster icache hits (`ABABABAB` and eight `Thread-B on CPU #0` lines before the 12M-cycle limit).
+   - RT-Thread passed through scripted shell `halt` with NEMU event DiffTest.
+   - UART output remained ordered/non-duplicated, CLINT DiffTest replay still worked, access faults and misalignment behavior remained correct, and `refill_beats == misses * 4` held for representative successful local-memory refills.
+   - Exit status: all previous Phase 6 functional tests pass, expected bounded runs remain narrowly documented, no known icache correctness regression remains, and counter output is stable enough for Phase 8.
 
 3. **P7-S3: Re-check Phase 7 exit criteria and plan Phase 8**
    - Re-run a focused confirmation set after any fixes from P7-S2.
