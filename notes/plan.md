@@ -448,7 +448,7 @@ Phase 4 exit criteria:
 
 ## Phase 5: System Bus, AXI4 Integration, and Device-Aware DiffTest
 
-Goal: replace ideal DPI memory assumptions with bus-oriented memory/device access matching the top-level spec, and refactor DiffTest so real MMIO devices can be tested without forcing REF and DUT peripheral timing to match.
+Goal: replace the current idealized DPI memory/device assumptions with a bus-oriented memory and device path that matches `specs/core.md`, while making DiffTest robust for real MMIO devices by replaying DUT-observed MMIO inputs into the NEMU reference.
 
 Relevant lecture guidance:
 
@@ -456,31 +456,85 @@ Relevant lecture guidance:
 - D6 ysyxSoC connection cautions.
 - `specs/core.md` top module AXI master/slave ports.
 
-Tasks:
+Scope decisions:
 
-1. Refactor IFU/LSU around valid/ready-style request/response interfaces if not already done.
-2. Add a simple internal bus abstraction that can evolve from simulation memory to AXI master.
-3. Implement aligned little-endian memory accesses; raise misaligned exceptions on unaligned accesses.
-4. Extend retired instruction / CommitEvent metadata to describe MMIO accesses: address, size, write data, write mask, read value, exception/access-fault status, and whether the access is normal memory or MMIO.
-5. Refactor DiffTest for peripherals before implementing physical CLINT:
-   - run REF with peripherals disabled or side effects suppressed;
-   - capture all DUT MMIO input values, especially MMIO read return values;
-   - replay captured MMIO read values into REF at the matching retired instruction;
-   - validate or suppress MMIO write side effects so UART output is not duplicated;
-   - continue comparing PC/GPR/CSR and exception behavior at retirement.
-6. Implement AXI master channels with 32-bit data width and required response handling.
-7. Hardwire reserved AXI slave outputs to zero and ignore reserved inputs.
-8. Keep the temporary retired-instruction timer from Phase 4 until device-aware DiffTest replay is working; do not replace it with physical CLINT earlier.
-9. Treat AXI `SLVERR`/`DECERR` as access faults.
-10. Add tests with deterministic and delayed memory responses to validate handshakes.
+- Keep Phase 4's temporary retired-instruction timer until device-aware MMIO replay is working.
+- Do not switch to the physical cycle-based CLINT in Phase 5; that belongs to Phase 6 after replay exists.
+- Do not add interrupts, UART input, optional PA devices, VME, graphics, storage, or SoC integration unless they are needed to validate the bus/DiffTest work.
+- Preserve the existing passing workload set throughout the phase: NPC directed tests, 35 cpu-tests with DiffTest, `hello`, timer smokes, CTE workloads, and RT-Thread AM smoke.
+- Simulate AXI before `ysyxSoC` integration with a local NPC AXI slave testbench/model in `npc/csrc` or adjacent simulation code. The model should provide RAM, UART MMIO, temporary CLINT/timer MMIO, configurable latency/backpressure, and `SLVERR`/`DECERR` responses, so core AXI behavior can be validated without requiring `ysyxSoC`.
+
+Sessions:
+
+1. **P5-S1: NEMU memory-region groundwork** — completed
+   - Refactored NEMU physical memory into a region table with loadable/writable attributes.
+   - Added checked guest copy helpers for image loading and DiffTest memory injection.
+   - Added Kconfig memory-map scheme selection with legacy and NPC placeholders.
+   - Revalidated NEMU `hello`, NPC `hello` with DiffTest, NPC directed regression, and 35 cpu-tests.
+   - Remaining caveat: temporary NPC UART/CLINT aliases still live in generic `paddr.c`.
+
+2. **P5-S2: Device/MMIO cleanup and replay contract**
+   - Move temporary NPC UART/CLINT address handling out of generic NEMU `paddr.c` into device/MMIO or platform-specific code.
+   - Define the ordered MMIO replay contract:
+     - DUT records retired MMIO accesses in CommitEvent metadata.
+     - For MMIO reads, DUT read value is replayed into REF at the matching retired instruction.
+     - For MMIO writes, REF side effects are suppressed or validated so UART output is not duplicated.
+     - Normal RAM traffic is not replayed transaction-by-transaction.
+   - Extend CommitEvent/DiffTest interfaces enough to carry MMIO address, size, write mask/data, read value, and access kind.
+   - Add a narrow directed test for non-loadable/non-writable memory region behavior if practical.
+   - Re-run: NEMU `hello`, NPC `hello` with DiffTest, RT-Thread NPC DiffTest smoke, NPC directed regression, and 35 cpu-tests.
+
+3. **P5-S3: NPC internal bus request/response boundary**
+   - Refactor IFU and LSU memory access around explicit request/response style interfaces.
+   - Keep behavior functionally equivalent to the current single-cycle/DPI model where possible.
+   - Ensure aligned little-endian load/store behavior remains unchanged.
+   - Preserve misaligned instruction/load/store exception behavior.
+   - Add or update directed tests for delayed responses and backpressure at the internal bus boundary.
+   - Re-run Phase 4 standard regressions.
+
+4. **P5-S4: AXI4 master shell and local simulation AXI slave**
+   - Implement the top-level AXI4 master port set required by `specs/core.md`.
+   - Connect IFU/LSU requests to an AXI-facing adapter in simulation.
+   - Add a local NPC AXI slave testbench/model before `ysyxSoC` is available:
+     - RAM region, e.g. `0x80000000..0x87ffffff`;
+     - UART MMIO, e.g. `0x10000000`;
+     - temporary CLINT/timer MMIO, e.g. `0x0200bff8`/`0x0200bffc`;
+     - empty/error regions returning `SLVERR` or `DECERR`.
+   - Initially support 32-bit aligned single-beat read/write; later extend read bursts for icache refill.
+   - Support valid/ready handshakes, response completion, configurable latency, and backpressure.
+   - Treat AXI `SLVERR`/`DECERR` as instruction/load/store access faults.
+   - Keep the reserved AXI slave interface hardwired inactive/zero and ignore reserved inputs.
+   - Keep UART host output ordered by retirement, not by unordered combinational bus probes.
+   - Add handshake tests with deterministic and delayed memory responses.
+
+5. **P5-S5: DiffTest with bus/MMIO access faults**
+   - Integrate access-fault results from the bus/AXI path into retired instruction metadata.
+   - Make DiffTest compare PC/GPR/CSR and exception behavior correctly when DUT sees bus errors.
+   - Add tests for instruction access fault, load access fault, and store access fault from simulated AXI error responses.
+   - Confirm `ebreak` termination still uses retired-instruction matching and does not mask access-fault behavior.
+
+6. **P5-S6: Full Phase 5 regression and closeout**
+   - Run the full Phase 4 standard set through the bus/AXI-facing path:
+     - NPC directed regression;
+     - all 35 cpu-tests with DiffTest;
+     - NPC/NEMU `hello`;
+     - NPC/NEMU timer smokes;
+     - NPC/NEMU `yield-os`;
+     - NPC `thread-os`;
+     - RT-Thread AM on NEMU and NPC with DiffTest.
+   - Update `notes/next.md` with exact commands, pass/fail table, and remaining caveats.
+   - Update `npc/README.md` or BSP notes only if user-facing run commands changed.
+   - Exit when a new session can reproduce the Phase 5 bus/DiffTest state from notes alone.
 
 Exit criteria:
 
-- Core can run previous tests through bus/AXI-facing memory model.
-- Device-aware DiffTest can replay DUT MMIO reads into REF with REF peripherals disabled/suppressed.
-- UART MMIO writes do not produce duplicate REF/DUT host output during DiffTest.
-- Misalignment and bus error exceptions are tested.
-- Top-level ports match `specs/core.md`.
+- The core can run previous functional tests through a bus/AXI-facing memory model.
+- Top-level ports match `specs/core.md`, including AXI master signals and inactive reserved AXI slave outputs.
+- Misaligned access behavior remains correct, and AXI `SLVERR`/`DECERR` produce the specified access faults.
+- Device-aware DiffTest can replay DUT-observed MMIO read values into the REF at retirement.
+- UART MMIO writes do not duplicate host output during DiffTest.
+- Temporary retired-instruction timer is still documented as temporary and remains in place until Phase 6.
+- Phase 4 workload set still passes or has documented, narrow, reproducible blockers.
 
 ## Phase 6: Physical Built-in CLINT, UART Path, and RT-Thread Stability
 
