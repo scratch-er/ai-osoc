@@ -25,27 +25,108 @@
 #define NPC_MTIME      (NPC_CLINT_BASE + 0xbff8u)
 #define NPC_MTIMEH     (NPC_CLINT_BASE + 0xbffcu)
 
+typedef struct {
+  const char *name;
+  paddr_t base;
+  uint32_t size;
+  uint8_t *host;
+  bool loadable;
+  bool writable;
+} MemRegion;
+
 #if   defined(CONFIG_PMEM_MALLOC)
 static uint8_t *pmem = NULL;
 #else // CONFIG_PMEM_GARRAY
 static uint8_t pmem[CONFIG_MSIZE] PG_ALIGN = {};
 #endif
 
-uint8_t* guest_to_host(paddr_t paddr) { return pmem + paddr - CONFIG_MBASE; }
-paddr_t host_to_guest(uint8_t *haddr) { return haddr - pmem + CONFIG_MBASE; }
+static MemRegion mem_regions[] = {
+#if defined(CONFIG_MEM_SCHEME_NPC)
+  { "npc-pmem", CONFIG_MBASE, 0x01000000u, NULL, true, true },
+#else
+  { "pmem", CONFIG_MBASE, CONFIG_MSIZE, NULL, true, true },
+#endif
+};
+
+#define NR_MEM_REGION ARRLEN(mem_regions)
+
+static inline bool range_in_region(const MemRegion *region, paddr_t addr, size_t len) {
+  paddr_t offset = addr - region->base;
+  return offset < region->size && len <= region->size - offset;
+}
+
+static inline MemRegion *find_mem_region(paddr_t addr, size_t len) {
+  if (likely(range_in_region(&mem_regions[0], addr, len))) { return &mem_regions[0]; }
+  for (int i = 1; i < NR_MEM_REGION; i++) {
+    if (range_in_region(&mem_regions[i], addr, len)) { return &mem_regions[i]; }
+  }
+  return NULL;
+}
+
+static inline uint8_t *region_guest_to_host(MemRegion *region, paddr_t addr) {
+  return region->host + addr - region->base;
+}
+
+bool paddr_is_backed(paddr_t addr, size_t len) {
+  return find_mem_region(addr, len) != NULL;
+}
+
+bool paddr_is_loadable(paddr_t addr, size_t len) {
+  MemRegion *region = find_mem_region(addr, len);
+  return region != NULL && region->loadable;
+}
+
+uint8_t* guest_to_host(paddr_t paddr) {
+  MemRegion *region = find_mem_region(paddr, 1);
+  Assert(region != NULL, "address = " FMT_PADDR " is not backed by physical memory", paddr);
+  return region_guest_to_host(region, paddr);
+}
+
+paddr_t host_to_guest(uint8_t *haddr) {
+  for (int i = 0; i < NR_MEM_REGION; i++) {
+    MemRegion *region = &mem_regions[i];
+    if (haddr >= region->host && haddr < region->host + region->size) {
+      return region->base + (haddr - region->host);
+    }
+  }
+  panic("host address %p is not backed by physical memory", haddr);
+}
+
+void paddr_memcpy_to_guest(paddr_t addr, const void *buf, size_t len, bool require_loadable) {
+  paddr_t end = addr + (paddr_t)len - 1;
+  MemRegion *region = find_mem_region(addr, len);
+  Assert(region != NULL, "load range [" FMT_PADDR ", " FMT_PADDR "] is not backed by physical memory",
+      addr, end);
+  Assert(!require_loadable || region->loadable,
+      "load range [" FMT_PADDR ", " FMT_PADDR "] targets non-loadable memory region '%s'",
+      addr, end, region->name);
+  memcpy(region_guest_to_host(region, addr), buf, len);
+}
+
+void paddr_memcpy_from_guest(void *buf, paddr_t addr, size_t len) {
+  paddr_t end = addr + (paddr_t)len - 1;
+  MemRegion *region = find_mem_region(addr, len);
+  Assert(region != NULL, "copy range [" FMT_PADDR ", " FMT_PADDR "] is not backed by physical memory",
+      addr, end);
+  memcpy(buf, region_guest_to_host(region, addr), len);
+}
 
 static word_t pmem_read(paddr_t addr, int len) {
-  word_t ret = host_read(guest_to_host(addr), len);
-  return ret;
+  MemRegion *region = find_mem_region(addr, len);
+  Assert(region != NULL, "address = " FMT_PADDR " is not backed by physical memory", addr);
+  return host_read(region_guest_to_host(region, addr), len);
 }
 
 static void pmem_write(paddr_t addr, int len, word_t data) {
-  host_write(guest_to_host(addr), len, data);
+  MemRegion *region = find_mem_region(addr, len);
+  Assert(region != NULL, "address = " FMT_PADDR " is not backed by physical memory", addr);
+  Assert(region->writable, "write to non-writable memory region '%s' at " FMT_PADDR " pc = " FMT_WORD,
+      region->name, addr, cpu.pc);
+  host_write(region_guest_to_host(region, addr), len, data);
 }
 
 static void out_of_bound(paddr_t addr) {
-  panic("address = " FMT_PADDR " is out of bound of pmem [" FMT_PADDR ", " FMT_PADDR "] at pc = " FMT_WORD,
-      addr, PMEM_LEFT, PMEM_RIGHT, cpu.pc);
+  panic("address = " FMT_PADDR " is out of bound of physical memory at pc = " FMT_WORD, addr, cpu.pc);
 }
 
 void init_mem() {
@@ -53,12 +134,17 @@ void init_mem() {
   pmem = malloc(CONFIG_MSIZE);
   assert(pmem);
 #endif
+  mem_regions[0].host = pmem;
   IFDEF(CONFIG_MEM_RANDOM, memset(pmem, rand(), CONFIG_MSIZE));
-  Log("physical memory area [" FMT_PADDR ", " FMT_PADDR "]", PMEM_LEFT, PMEM_RIGHT);
+  for (int i = 0; i < NR_MEM_REGION; i++) {
+    Log("physical memory region '%s' [" FMT_PADDR ", " FMT_PADDR "] loadable=%d writable=%d",
+        mem_regions[i].name, mem_regions[i].base, mem_regions[i].base + mem_regions[i].size - 1,
+        mem_regions[i].loadable, mem_regions[i].writable);
+  }
 }
 
 word_t paddr_read(paddr_t addr, int len) {
-  if (likely(in_pmem(addr))) {
+  if (likely(paddr_is_backed(addr, len))) {
     return pmem_read(addr, len);
   }
   if (addr == NPC_MTIME || addr == NPC_MTIMEH) {
@@ -77,7 +163,7 @@ word_t paddr_read(paddr_t addr, int len) {
 }
 
 void paddr_write(paddr_t addr, int len, word_t data) {
-  if (likely(in_pmem(addr))) { pmem_write(addr, len, data); return; }
+  if (likely(paddr_is_backed(addr, len))) { pmem_write(addr, len, data); return; }
   if (addr >= NPC_CLINT_BASE && addr < NPC_CLINT_END) { return; }
 #ifdef CONFIG_DEVICE
   if (addr == NPC_UART_MMIO && len == 1) { return; }

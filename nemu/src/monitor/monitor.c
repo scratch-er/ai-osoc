@@ -51,9 +51,13 @@ static long load_img() {
 
   Log("The image is %s, size = %ld", img_file, size);
 
+  uint8_t *buf = malloc(size);
+  assert(buf);
   fseek(fp, 0, SEEK_SET);
-  int ret = fread(guest_to_host(RESET_VECTOR), size, 1, fp);
+  int ret = fread(buf, size, 1, fp);
   assert(ret == 1);
+  paddr_memcpy_to_guest(RESET_VECTOR, buf, size, true);
+  free(buf);
 
   fclose(fp);
   return size;
@@ -133,7 +137,7 @@ static long load_img() {
   extern char bin_start, bin_end;
   size_t size = &bin_end - &bin_start;
   Log("img size = %ld", size);
-  memcpy(guest_to_host(RESET_VECTOR), &bin_start, size);
+  paddr_memcpy_to_guest(RESET_VECTOR, &bin_start, size, true);
   return size;
 }
 

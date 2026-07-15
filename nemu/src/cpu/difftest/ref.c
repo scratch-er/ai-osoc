@@ -22,12 +22,10 @@
 void cpu_exec(uint64_t n);
 
 __EXPORT void difftest_memcpy(paddr_t addr, void *buf, size_t n, bool direction) {
-  assert(in_pmem(addr));
-  assert(in_pmem(addr + n - 1));
   if (direction == DIFFTEST_TO_REF) {
-    memcpy(guest_to_host(addr), buf, n);
+    paddr_memcpy_to_guest(addr, buf, n, true);
   } else {
-    memcpy(buf, guest_to_host(addr), n);
+    paddr_memcpy_from_guest(buf, addr, n);
   }
 }
 

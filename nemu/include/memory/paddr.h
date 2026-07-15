@@ -27,8 +27,13 @@ uint8_t* guest_to_host(paddr_t paddr);
 /* convert the host virtual address in NEMU to guest physical address in the guest program */
 paddr_t host_to_guest(uint8_t *haddr);
 
+bool paddr_is_backed(paddr_t addr, size_t len);
+bool paddr_is_loadable(paddr_t addr, size_t len);
+void paddr_memcpy_to_guest(paddr_t addr, const void *buf, size_t len, bool require_loadable);
+void paddr_memcpy_from_guest(void *buf, paddr_t addr, size_t len);
+
 static inline bool in_pmem(paddr_t addr) {
-  return addr - CONFIG_MBASE < CONFIG_MSIZE;
+  return paddr_is_backed(addr, 1);
 }
 
 word_t paddr_read(paddr_t addr, int len);

@@ -15,6 +15,15 @@ config PC_RESET_OFFSET
   default 0
 
 choice
+  prompt "Memory map scheme"
+  default MEM_SCHEME_LEGACY
+config MEM_SCHEME_LEGACY
+  bool "Legacy single loadable writable RAM"
+config MEM_SCHEME_NPC
+  bool "NPC simulation memory map"
+endchoice
+
+choice
   prompt "Physical memory definition"
   default PMEM_GARRAY
 config PMEM_MALLOC

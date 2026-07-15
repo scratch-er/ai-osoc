@@ -271,29 +271,115 @@ Known P4-S7 caveats:
 - RT-Thread AM app integration is partial: `hello`, `microbench`, and `typing-game` are integrated; `snake` fails its separate AM build due to missing `<stdlib.h>` in that AM app path, and `fceux-am` is absent. This is not a blocker for the RT-Thread boot smoke.
 - AM's NEMU platform still declares a stale 128 MiB `PMEM_END`, while the current NEMU native build exposes 32 MiB. P4-S7 clamps only RT-Thread's NEMU heap; a broader AM/NEMU memory-size cleanup can be considered separately.
 
+P5-S1 completed work:
+
+- Chose the NEMU memory-map direction: keep NEMU as an independent region-based reference and use ordered DiffTest replay only for side-effectful/nondeterministic devices, not for all DUT bus transactions.
+- Refactored NEMU physical memory simulation from direct `CONFIG_MBASE`/`CONFIG_MSIZE` pointer arithmetic to a small compile-time `MemRegion` table in `nemu/src/memory/paddr.c`.
+- Added memory-region attributes requested for future SoC maps:
+  - `loadable`: simulation image/DiffTest injection may copy bytes into the region;
+  - `writable`: core stores may modify the region.
+- Added `paddr_is_backed()`, `paddr_is_loadable()`, `paddr_memcpy_to_guest()`, and `paddr_memcpy_from_guest()` in `nemu/include/memory/paddr.h` / `nemu/src/memory/paddr.c`.
+- Updated NEMU native image loading, TARGET_AM image loading, built-in ISA images, and REF `difftest_memcpy()` to use the new checked copy helpers instead of raw `memcpy(guest_to_host(...))`.
+- Added a compile-time Kconfig memory-map scheme choice in `nemu/src/memory/Kconfig`:
+  - `MEM_SCHEME_LEGACY`: default single loadable/writable RAM using `CONFIG_MBASE`/`CONFIG_MSIZE`;
+  - `MEM_SCHEME_NPC`: NPC simulation map placeholder, currently a 16 MiB loadable/writable region at `CONFIG_MBASE` to match NPC DiffTest image copying.
+- Synchronized `nemu/.config` so `CONFIG_MEM_SCHEME_LEGACY=y` is explicit.
+
+Validated P5-S1 commands and results:
+
+1. Rebuild NEMU native executable and REF shared object:
+
+   ```sh
+   make -C nemu
+   make -C nemu ISA=riscv32 SHARE=1
+   ```
+
+   Result: passed/no-op after the final config sync (`make: Nothing to be done for 'app'.`). Earlier rebuilds compiled `src/memory/paddr.c` and linked both outputs successfully.
+
+2. NEMU `hello` smoke:
+
+   ```sh
+   make -C am-kernels/kernels/hello ARCH=riscv32-nemu \
+     AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+     NEMU_HOME=/Users/venti/Workspace/ai-ysyx/nemu \
+     CROSS_COMPILE=riscv64-elf- NEMU_MAX_INSTS=200000 run
+   ```
+
+   Result: passed; printed `Hello, AbstractMachine!` and:
+
+   ```text
+   NEMU_RESULT status=good state=2 halt_pc=0x800000c4 halt_ret=0 insts=352 limit=200000
+   ```
+
+3. NPC `hello` with NEMU event DiffTest:
+
+   ```sh
+   make -C am-kernels/kernels/hello ARCH=riscv32e-npc \
+     AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+     CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=200000 \
+     NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+   ```
+
+   Result: passed; printed `Hello, AbstractMachine!` and:
+
+   ```text
+   NPC_RESULT status=good reason=good_trap cycles=465 insts=465 pc=0x800000c4 halted=1 limit=200000 x1=0x800000c0 a0=0x00000000 trap=1
+   ```
+
+4. Full NPC directed regression:
+
+   ```sh
+   make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest
+   ```
+
+   Result: passed by Makefile expectations. Some raw output intentionally contains expected `status=bad`, `status=limit`, and check-fail snippets for negative/debug-path tests.
+
+5. Full 35-test `cpu-tests` sweep on NPC with NEMU event DiffTest:
+
+   ```sh
+   ROOT=/Users/venti/Workspace/ai-ysyx
+   TESTDIR="$ROOT/am-kernels/tests/cpu-tests/tests"
+   for t in $(cd "$TESTDIR" && ls *.c | sed 's/\.c$//' | sort); do
+     tmp=$(mktemp /tmp/am-$t.XXXXXX.mk) || exit 1
+     printf 'NAME = %s\nSRCS = %s/%s.c\nINC_PATH += %s/am-kernels/tests/cpu-tests/include\ninclude %s/abstract-machine/Makefile\n' "$t" "$TESTDIR" "$t" "$ROOT" "$ROOT" > "$tmp"
+     make -f "$tmp" ARCH=riscv32e-npc AM_HOME="$ROOT/abstract-machine" CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=2000000 NPC_DIFFTEST_REF="$ROOT/nemu/build/riscv32-nemu-interpreter-so" run >/tmp/npc-cputest-$t.log 2>&1
+     status=$?
+     rm -f "$tmp"
+     if [ $status -ne 0 ]; then echo "FAILED $t"; tail -80 /tmp/npc-cputest-$t.log; exit $status; fi
+     echo "PASS $t"
+   done
+   ```
+
+   Result: all 35 cpu-tests passed with DiffTest enabled.
+
+Known P5-S1 caveats:
+
+- The region table currently has one region in each scheme; it is now structurally ready for multiple regions, but no ROM/non-loadable/non-writable directed test has been added yet.
+- `MEM_SCHEME_NPC` is present but not selected by the checked-in `.config`; select it with Kconfig and rebuild when the NPC/NEMU map mismatch must be exercised directly.
+- NEMU `paddr.c` still contains the temporary NPC UART/CLINT fallback aliases from Phase 4. They should move into device/MMIO or platform-specific code in the next MMIO replay/device cleanup slice.
+- `paddr_memcpy_to_guest()` currently requires a copied range to fit within one region. That is fine for current binary loading and DiffTest image injection, but future ELF/multi-region loading should copy chunk-by-chunk across loadable regions.
+
 Next work:
 
-Start `P4-S8: RT-Thread AM on NPC and DiffTest-safe smoke`.
+Continue with `P5-S2: device-aware MMIO cleanup and replay groundwork` before returning to NPC RT-Thread if DiffTest/device-map mismatch remains the limiting issue.
 
-Concrete P4-S8 plan:
+Concrete P5-S2 plan:
 
-1. Run/init RT-Thread AM for `ARCH=riscv32e-npc` with `AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine`, `CROSS_COMPILE=riscv64-elf-`, and a bounded `NPC_MAX_CYCLES`.
-2. Fix only blockers needed to reach the same visible milestone as NEMU: RT-Thread banner, `Hello RISC-V!`, scripted shell output, and final `msh />` or a narrow blocker.
-3. Use NEMU event DiffTest only if practical; if the current Phase 4 MMIO/timer workaround makes RT-Thread DiffTest noisy, record a no-DiffTest smoke first and defer full MMIO replay to Phase 5.
-4. Do not add timer interrupts, preemptive scheduling, UART RX, optional shell apps, storage, graphics, or network support in P4-S8.
-5. Update `notes/next.md` with NPC RT-Thread commands/status before Phase 4 closeout.
+1. Move the temporary NPC UART/CLINT address handling out of generic `paddr.c` into a platform/device helper or proper MMIO maps.
+2. Define the ordered MMIO replay contract for UART/timer/CLINT reads/writes without replaying all RAM bus transactions.
+3. Add directed tests for non-writable/loadable region behavior, either by temporarily selecting a scheme with a ROM-like region or by a narrow unit-style memory test.
+4. Re-run NEMU `hello`, NPC `hello` with DiffTest, NPC directed regression, and the 35 `cpu-tests` sweep.
 
 Relevant files:
 
 - `notes/plan.md`
 - `notes/next.md`
-- `rt-thread-am/bsp/abstract-machine/Makefile`
-- `rt-thread-am/bsp/abstract-machine/src/context.c`
-- `rt-thread-am/bsp/abstract-machine/src/interrupt.c`
-- `rt-thread-am/bsp/abstract-machine/src/uart.c`
-- `rt-thread-am/bsp/abstract-machine/src/init.c`
-- `rt-thread-am/bsp/abstract-machine/integrate-am-apps.py`
-- `rt-thread-am/components/libc/compilers/common/extension/`
-- `abstract-machine/scripts/platform/npc.mk`
-- `npc/csrc/`
-- `npc/rtl/`
+- `nemu/src/memory/paddr.c`
+- `nemu/include/memory/paddr.h`
+- `nemu/src/memory/Kconfig`
+- `nemu/src/monitor/monitor.c`
+- `nemu/src/cpu/difftest/ref.c`
+- `nemu/src/device/io/mmio.c`
+- `nemu/src/device/io/map.c`
+- `npc/csrc/difftest.cpp`
+- `npc/csrc/memory.cpp`
