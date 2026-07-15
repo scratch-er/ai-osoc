@@ -163,7 +163,17 @@ public:
       if (Verilated::gotFinish()) return {"bad", "host_finish"};
       if (top_.debug_halted) return finish_reason(false);
       if (cycles_ >= args_.max_cycles) return {"limit", "cycle_limit"};
-      if (!top_.commit_valid) return {"bad", "no_commit"};
+      if (!top_.commit_valid) {
+        memory_.clear_mmio_record();
+        memory_.set_time(retire_ + 1);
+        eval_cycle();
+        pending_mmio_read_ = memory_.mmio_record();
+        if (pending_mmio_read_.is_write) {
+          pending_mmio_read_ = {};
+        }
+        cycles_++;
+        continue;
+      }
 
       memory_.clear_mmio_record();
       memory_.set_time(retire_ + 1);
@@ -185,6 +195,9 @@ public:
       }
       eval_cycle();
       pending_mmio_read_ = memory_.mmio_record();
+      if (pending_mmio_read_.is_write) {
+        pending_mmio_read_ = {};
+      }
       if (!mmio_record.valid) {
         mmio_record = read_mmio_record;
       }
@@ -387,6 +400,8 @@ bool parse_args(int argc, char **argv, Args *args) {
     } else if (std::strcmp(argv[i], "--help") == 0) {
       usage(argv[0]);
       std::exit(0);
+    } else if (argv[i][0] == '+') {
+      // Verilator plusargs are consumed by RTL through $value$plusargs.
     } else {
       std::fprintf(stderr, "unknown argument: %s\n", argv[i]);
       usage(argv[0]);

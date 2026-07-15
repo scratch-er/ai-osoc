@@ -15,7 +15,7 @@ ifeq ($(TRACE),1)
 VERILATOR_FLAGS += --trace
 endif
 
-.PHONY: all run smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest clean
+.PHONY: all run smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-mem-latency test-rv32e-illegal test-csr-trap test-debug test-difftest clean
 
 all: $(BIN)
 
@@ -58,6 +58,12 @@ test-alu: $(BIN)
 	printf '%s\n' "$$out" | grep 'NPC_TRAP code=1' >/dev/null; \
 	printf '%s\n' "$$out" | grep 'NPC_CHECK x1=0x12345678 expect=0x12345678 PASS' >/dev/null; \
 	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap cycles=21 insts=21 pc=0x00000150 halted=1 limit=32 x1=0x12345678 a0=0x00000000 trap=1' >/dev/null
+
+test-mem-latency: $(BIN)
+	@out="$$($(BIN) --image tests/bin/lw-sw.bin --reset-pc 0x100 --max-cycles 32 --expect-x1 0x2a +npc_mem_latency=2 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_CHECK x1=0x0000002a expect=0x0000002a PASS' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap cycles=11 insts=5 pc=0x00000110 halted=1 limit=32 x1=0x0000002a a0=0x00000000 trap=1' >/dev/null
 
 test-mem-size: $(BIN)
 	@out="$$($(BIN) --image tests/bin/byte-half-memory.bin --reset-pc 0x100 --max-cycles 32 --expect-x1 0xffff7f01 2>&1)"; \

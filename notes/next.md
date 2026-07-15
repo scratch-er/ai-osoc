@@ -186,49 +186,38 @@ Known caveats after Phase 4:
 - M-extension remains out of scope for the NPC core because the target is RV32E_Zicsr. NEMU implements RV32M only because its `riscv32-nemu` AM target uses `rv32im_zicsr`.
 - UART input is intentionally unsupported.
 
-## P5-S2 status: Device/MMIO cleanup and lightweight replay
+## P5-S3 status: NPC internal bus request/response boundary
 
-P5-S2 implementation is complete and waiting for user note review before commit.
+P5-S3 implementation is complete and waiting for user review before commit.
 
 What changed:
 
-- Removed temporary NPC UART/CLINT special cases from generic `nemu/src/memory/paddr.c`; `paddr.c` now falls through to the MMIO framework for unbacked device addresses when `CONFIG_DEVICE=y`.
-- Added `nemu/src/device/npc-dev.c` and `nemu/include/debug/mmio_replay.h`:
-  - NPC UART MMIO at `0x10000000`.
-  - NPC CLINT MMIO at `0x02000000..0x0200bfff`, matching `specs/clint.rst` bound address and register offsets (`msip=0x0`, `mtimecmp=0x4000`, `mtime=0xbff8`).
-  - Temporary `mtime` still uses the Phase 4 retired-instruction model, not physical cycles.
-  - REF shared-object (`CONFIG_TARGET_SHARE`) mode validates/replays a single pending MMIO access and suppresses duplicate UART output.
-- Added a lightweight replay API exported by NEMU REF:
-  - `difftest_set_mmio_replay(const MMIOReplayRecord *)`
-  - `difftest_mmio_replay_ok()`
-- Did **not** add MMIO fields to `CommitEvent`. The replay contract is separate:
-  - NPC DUT/harness records a just-retired MMIO access.
-  - NPC DiffTest arms the REF replay before stepping the matching REF instruction.
-  - REF device callbacks validate matching MMIO and replay DUT read data.
-- Updated `npc/csrc/memory.{h,cpp}` and `npc/csrc/main.cpp` to record MMIO reads/writes while preserving retired UART output ordering.
-- Updated `npc/csrc/difftest.{h,cpp}` to pass optional MMIO replay records to REF.
-- Updated `nemu/scripts/build.mk` so shared-object builds define `CONFIG_TARGET_SHARE`; `cpu-exec.c` now has a REF-share breakpoint stub because monitor code is blacklisted from REF builds.
+- Replaced the empty `npc/rtl/bus/MemIf.v` shell with an explicit request/response memory boundary:
+  - `valid/write/addr/wdata/wmask` request signals.
+  - `ready/rdata` response signals.
+  - Default zero-latency behavior preserves existing single-cycle execution.
+  - Optional LSU latency/backpressure is enabled with Verilator plusarg `+npc_mem_latency=N`.
+- Refactored `npc/rtl/core/Ifu.v` to expose an instruction fetch request/response boundary instead of directly calling DPI `pmem_read()`.
+  - IFU currently remains zero-latency in `Core.v`; delayed instruction fetch needs a proper fetch-hold stage and is deferred to the later AXI/cache work.
+- Refactored `npc/rtl/core/Lsu.v` to expose a data memory request/response boundary instead of directly calling DPI `pmem_read()`/`pmem_write()`.
+  - Existing aligned little-endian byte/halfword/word formatting and write-mask behavior are preserved.
+- Updated `npc/rtl/core/Core.v` so commit, writeback, CSR commit/trap update, and PC update wait for IFU/LSU ready.
+- Updated `npc/csrc/main.cpp` so the harness treats `commit_valid=0` as a wait/backpressure cycle instead of an immediate `no_commit` failure.
+  - Verilator plusargs are now accepted by argument parsing.
+  - Pending MMIO replay cache is kept only for reads; writes are supplied from retired commit metadata so stale write records do not pollute the next instruction's DiffTest step.
+- Added `make -C npc test-mem-latency`, which runs `lw-sw.bin` with `+npc_mem_latency=2` and checks that the same 5 retired instructions complete in 11 cycles.
 
-Validated in P5-S2:
+Validated in P5-S3:
 
-1. NEMU native and REF shared object build:
+1. NPC directed regression including the new latency test:
 
    ```sh
-   make -C nemu
-   make -C nemu CONFIG_TARGET_NATIVE_ELF= CONFIG_TARGET_SHARE=y -B
-   ```
-
-   Result: both built successfully.
-
-2. NPC directed regression:
-
-   ```sh
-   make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest
+   make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-mem-latency test-rv32e-illegal test-csr-trap test-debug test-difftest
    ```
 
    Result: passed by Makefile expectations.
 
-3. Full 35-test `cpu-tests` sweep on NPC with NEMU event DiffTest:
+2. Full 35-test `cpu-tests` sweep on NPC with NEMU event DiffTest:
 
    ```sh
    ROOT=/Users/venti/Workspace/ai-ysyx
@@ -237,28 +226,17 @@ Validated in P5-S2:
    for t in $(cd "$TESTDIR" && ls *.c | sed 's/\.c$//' | sort); do
      tmp=$(mktemp /tmp/am-$t.XXXXXX.mk) || exit 1
      printf 'NAME = %s\nSRCS = %s/%s.c\nINC_PATH += %s/am-kernels/tests/cpu-tests/include\ninclude %s/abstract-machine/Makefile\n' "$t" "$TESTDIR" "$t" "$ROOT" "$ROOT" > "$tmp"
-     make -f "$tmp" ARCH=riscv32e-npc AM_HOME="$ROOT/abstract-machine" CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=2000000 NPC_DIFFTEST_REF="$REF" run >/tmp/p5-s2-cputest-$t.log 2>&1
+     make -f "$tmp" ARCH=riscv32e-npc AM_HOME="$ROOT/abstract-machine" CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=2000000 NPC_DIFFTEST_REF="$REF" run >/tmp/p5-s3-cputest-$t.log 2>&1
      status=$?
      rm -f "$tmp"
-     if [ $status -ne 0 ]; then echo "FAILED $t"; tail -80 /tmp/p5-s2-cputest-$t.log; exit $status; fi
+     if [ $status -ne 0 ]; then echo "FAILED $t"; tail -80 /tmp/p5-s3-cputest-$t.log; exit $status; fi
      echo "PASS $t"
    done
    ```
 
    Result: all 35 tests passed.
 
-4. NEMU `hello`:
-
-   ```sh
-   make -C am-kernels/kernels/hello ARCH=riscv32-nemu \
-     AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
-     NEMU_HOME=/Users/venti/Workspace/ai-ysyx/nemu \
-     CROSS_COMPILE=riscv64-elf- NEMU_MAX_INSTS=200000 run
-   ```
-
-   Result: printed `Hello, AbstractMachine!` and `NEMU_RESULT status=good state=2 halt_pc=0x800000c4 halt_ret=0 insts=352 limit=200000`.
-
-5. NPC `hello` with NEMU DiffTest:
+3. NPC `hello` with NEMU DiffTest:
 
    ```sh
    make -C am-kernels/kernels/hello ARCH=riscv32e-npc \
@@ -267,9 +245,9 @@ Validated in P5-S2:
      NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
    ```
 
-   Result: printed `Hello, AbstractMachine!`, `NEMU_RESULT status=good`, and `NPC_RESULT status=good reason=good_trap cycles=465 insts=465 pc=0x800000c4 ...` with no duplicated REF UART output.
+   Result: exit code 0. Output contained `Hello, AbstractMachine!`, `NEMU_RESULT status=good`, and `NPC_RESULT status=good reason=good_trap cycles=465 insts=465 pc=0x800000c4 ...`.
 
-6. RT-Thread AM on NPC with NEMU DiffTest:
+4. RT-Thread AM on NPC with NEMU DiffTest:
 
    ```sh
    make -C rt-thread-am/bsp/abstract-machine ARCH=riscv32e-npc \
@@ -280,7 +258,7 @@ Validated in P5-S2:
 
    Result: exit code 0. Output contained RT-Thread banner, `Hello RISC-V!`, scripted shell commands through `msh />halt`, `NEMU_RESULT status=good`, and `NPC_RESULT status=good reason=good_trap cycles=511954 insts=511954 ...`.
 
-7. NPC timer/devscan smoke with DiffTest:
+5. NPC timer/devscan smoke with DiffTest:
 
    ```sh
    make -C am-kernels/tests/am-tests ARCH=riscv32e-npc \
@@ -291,7 +269,7 @@ Validated in P5-S2:
 
    Result: expected nonzero exit after optional-device probing. It printed `Loop 10^7 time elapse: 500 ms`, then `NPC_RESULT status=bad reason=bad_trap cycles=50013020 ...`. No DiffTest mismatch before the expected bad trap.
 
-8. NPC RTC/timer smoke with DiffTest:
+6. NPC RTC/timer smoke with DiffTest:
 
    ```sh
    make -C am-kernels/tests/am-tests ARCH=riscv32e-npc \
@@ -302,31 +280,29 @@ Validated in P5-S2:
 
    Result: expected nonzero exit due to cycle limit. It printed `1900-1-1 00:00:01 GMT (1 second).`, then `NPC_RESULT status=limit reason=cycle_limit cycles=120000000 ...`. No DiffTest mismatch.
 
-Known caveats after P5-S2:
+Known caveats after P5-S3:
 
-- The replay contract is intentionally a one-access-per-retired-instruction mechanism. Current single-cycle NPC instructions only produce at most one architectural MMIO access; revisit if bus/pipeline work can retire instructions with multiple device accesses.
-- The NPC harness has a small pending-read workaround because Verilator may evaluate combinational DPI reads for the next instruction before the next harness step begins. This is still kept inside the harness/replay boundary and should be revisited when P5-S3 introduces explicit request/response memory timing.
+- The IFU is structurally behind a request/response boundary but is intentionally held at zero latency. Nonzero fetch latency currently needs an instruction-hold/fetch stage and is better handled with the upcoming AXI/cache work.
+- LSU backpressure is supported only by the local DPI-backed `MemIf` test path. The external AXI master and local AXI slave model remain P5-S4 work.
+- The replay contract remains one-access-per-retired-instruction. Current single-cycle NPC instructions still produce at most one architectural data MMIO access.
 - CLINT implements the `specs/clint.rst` address window but still uses the temporary retired-instruction timer source. Physical cycle-based CLINT remains Phase 6 work.
 - `am-tests mainargs=d` still panics after the required timer/devscan section due to optional IOE registers; this remains outside scope.
 - `am-tests mainargs=t` is intentionally bounded by cycle limit.
 - NEMU native device support is still UART/timer plus the temporary NPC-compatible UART/CLINT aliases.
 - `difftest_raise_intr()` in the NEMU REF shared object still asserts.
 
-Next work: `P5-S3: NPC internal bus request/response boundary`.
+Next work: `P5-S4: AXI4 master shell and local simulation AXI slave`.
 
 Relevant files for next session:
 
 - `notes/plan.md`
 - `notes/next.md`
-- `nemu/include/debug/mmio_replay.h`
-- `nemu/src/device/npc-dev.c`
-- `nemu/src/memory/paddr.c`
-- `nemu/src/cpu/difftest/ref.c`
-- `npc/csrc/main.cpp`
-- `npc/csrc/memory.cpp`
-- `npc/csrc/memory.h`
-- `npc/csrc/difftest.cpp`
-- `npc/csrc/difftest.h`
+- `npc/rtl/bus/MemIf.v`
 - `npc/rtl/core/Ifu.v`
 - `npc/rtl/core/Lsu.v`
 - `npc/rtl/core/Core.v`
+- `npc/csrc/main.cpp`
+- `npc/Makefile`
+- `nemu/include/debug/mmio_replay.h`
+- `npc/csrc/memory.cpp`
+- `npc/csrc/difftest.cpp`
