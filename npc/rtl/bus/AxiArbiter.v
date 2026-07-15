@@ -1,6 +1,7 @@
 module AxiArbiter (
   input         ifu_valid,
   input  [31:0] ifu_addr,
+  input  [7:0]  ifu_len,
   output        ifu_ready,
   output [31:0] ifu_rdata,
   output        ifu_error,
@@ -15,6 +16,7 @@ module AxiArbiter (
   output        bus_valid,
   output        bus_write,
   output [31:0] bus_addr,
+  output [7:0]  bus_len,
   output [31:0] bus_wdata,
   output [3:0]  bus_wmask,
   input         bus_ready,
@@ -28,6 +30,7 @@ module AxiArbiter (
   assign bus_valid = use_lsu || use_ifu;
   assign bus_write = use_lsu && lsu_write;
   assign bus_addr = use_lsu ? lsu_addr : ifu_addr;
+  assign bus_len = use_lsu ? 8'd0 : ifu_len;
   assign bus_wdata = use_lsu ? lsu_wdata : 32'd0;
   assign bus_wmask = use_lsu ? lsu_wmask : 4'd0;
 

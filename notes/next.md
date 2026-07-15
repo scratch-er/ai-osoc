@@ -10,7 +10,7 @@ Current state:
 - Phase 6 (`Physical Built-in CLINT, UART Path, and RT-Thread Stability`) is closed and committed:
   - `8170098 Implement physical CLINT`
   - `84d258d Validate physical CLINT workloads`
-- Phase 7 (`Instruction Cache and fence.i`) is planned as three AI-oriented sessions in `notes/plan.md`.
+- Phase 7 (`Instruction Cache and fence.i`) is complete through `P7-S1: Implement icache, fence.i, counters, and smoke tests`.
 - NPC implementation style is **Verilog**.
 - Repository status before Phase 2 already had untracked `.DS_Store`, `activate`, and top-level `.gitignore`; leave them alone unless the user explicitly asks. Current `git status --short` still shows untracked top-level `.gitignore`.
 - Top-level `build/` contains generated AM/NPC images, logs, and the ignored temporary `build/sonnet-libc-src` clone used as the Sonnet libc source reference; do not commit generated artifacts unless explicitly requested.
@@ -170,9 +170,85 @@ Phase 7 exit criteria:
 - AMAT counters are emitted and internally consistent.
 - Phase 8 has reproducible commands and representative counter output to start from.
 
+## Phase 7 Session 1 status
+
+`P7-S1: Implement icache, fence.i, counters, and smoke tests` is implemented and smoke-validated.
+
+Implemented behavior:
+
+- `npc/rtl/core/Ifu.v` is now a stateful direct-mapped flip-flop icache:
+  - 32-byte total capacity, 2 lines, 16 bytes per line, 4 RV32 instructions per line.
+  - Index is `pc[4]`, word offset is `pc[3:2]`, tag is `pc[31:5]`.
+  - All instruction-fetch addresses are treated cacheable.
+- IFU misses request a 16-byte AXI INCR read burst with `arlen=3`, `arsize=2`, `arburst=INCR`.
+- LSU/data accesses remain single-beat; CLINT LSU-side bypass behavior is unchanged.
+- `npc/rtl/bus/AxiArbiter.v` carries IFU read length to `AxiMaster`; LSU length is fixed to zero.
+- `npc/rtl/bus/AxiMaster.v` supports multi-beat read responses while preserving single-beat writes.
+- `npc/rtl/bus/LocalAxiSlave.v` returns multi-beat local read bursts from DPI memory.
+- `fence.i` now invalidates the icache valid bits when the instruction retires successfully.
+- `Core.v`/`NPC.v` expose icache counters to Verilator.
+- `npc/csrc/main.cpp` prints a structured `NPC_ICACHE` line:
+  - `accesses`, `hits`, `misses`, `miss_wait_cycles`, `refill_beats`, `hit_rate_x1000`, `amat_x1000`.
+- Added generated directed tests:
+  - `npc/tests/make-icache-bin.py`
+  - `npc/tests/make-fencei-bin.py`
+  - Make targets `test-icache` and `test-fencei`.
+- Existing Makefile exact-cycle checks were relaxed where icache timing changes cycles; semantic checks remain for status, register values, trap causes, DiffTest status, and MMIO replay.
+
+P7-S1 validation completed:
+
+1. Focused icache and fence.i tests:
+
+```sh
+make -C npc test-icache test-fencei
+```
+
+Result: passed.
+
+Representative counters:
+
+- `test-icache`: `NPC_ICACHE accesses=19 hits=17 misses=2 miss_wait_cycles=12 refill_beats=8 hit_rate_x1000=894 amat_x1000=1631`
+- `test-fencei`: `NPC_ICACHE accesses=9 hits=4 misses=5 miss_wait_cycles=30 refill_beats=20 hit_rate_x1000=444 amat_x1000=4333`
+
+2. Directed NPC smoke/regression subset:
+
+```sh
+make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest test-clint
+```
+
+Result: passed after relaxing exact-cycle greps for icache timing. Notable changed cycle counts include `test-lw-sw` now 26 cycles and `byte-half-memory` now 70 cycles. `test-clint` passed with DiffTest and physical CLINT replay; representative counter line: `NPC_ICACHE accesses=19 hits=14 misses=5 miss_wait_cycles=30 refill_beats=20 hit_rate_x1000=736 amat_x1000=2578`.
+
+3. Access-fault directed DiffTest:
+
+```sh
+make -C npc test-access-fault
+```
+
+Result: passed. The instruction-access-fault subcase needed `--max-cycles 64` instead of 40 because icache refill adds cycles before reaching the final ebreak.
+
+4. NPC `hello` with NEMU event DiffTest:
+
+```sh
+make -C am-kernels/kernels/hello ARCH=riscv32e-npc \
+  AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=2000000 \
+  NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+Result: passed. Output contained `Hello, AbstractMachine!`, `mainargs = ''.`, `NEMU_RESULT status=good`, and `NPC_RESULT status=good reason=good_trap cycles=2116 insts=465 ...`. Representative counter line: `NPC_ICACHE accesses=465 hits=297 misses=168 miss_wait_cycles=1008 refill_beats=672 hit_rate_x1000=638 amat_x1000=3167`.
+
+Known caveats / follow-up for P7-S2:
+
+- Full 35-test `cpu-tests`, bounded timer/CTE/thread smokes, and RT-Thread regression have not yet been rerun after icache; that is the planned scope of P7-S2.
+- Counter definitions are simple RTL counters: an access is counted per accepted IFU fetch request; `miss_wait_cycles` counts cycles while refill is outstanding; `refill_beats` should equal `misses * 4` for successful local-memory refills.
+- `NPC_RESULT` remains semantically stable but exact cycle counts changed because hits are faster and misses refill four beats.
+
 ## Next steps
 
-1. Start `P7-S1`.
-2. Inspect current IFU/AXI implementation before editing: `npc/rtl/core/Ifu.v`, `npc/rtl/core/Core.v`, `npc/rtl/bus/AxiArbiter.v`, `npc/rtl/bus/AxiMaster.v`, local AXI simulation code, and existing NPC tests.
-3. Implement icache, `fence.i`, counters, and focused smoke tests with minimal changes outside the fetch path.
-4. Run the P7-S1 smoke set and update notes before committing.
+1. Start `P7-S2: Full regression and bug fixing`.
+2. Run the full practical regression suite with icache enabled:
+   - NPC directed regression including `test-icache`, `test-fencei`, `test-access-fault`, and `test-clint`.
+   - Full 35-test `cpu-tests` sweep with NEMU event DiffTest using the existing macOS `printf` Makefile workaround.
+   - `hello`, timer/devscan bounded smoke, bounded `yield-os`, bounded `thread-os`, and RT-Thread with DiffTest.
+3. Fix any icache, burst, `fence.i`, counter, CLINT replay, or UART-ordering regression found by the full sweep.
+4. Record exact P7-S2 commands, pass/fail results, representative `NPC_ICACHE` output, and remaining caveats.

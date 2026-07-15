@@ -630,6 +630,13 @@ int main(int argc, char **argv) {
   uint32_t trap_status = result.status == "limit" ? NPC_STATUS_LIMIT :
                          result.reason == "good_trap" ? NPC_STATUS_GOOD :
                          result.reason == "bad_trap" ? NPC_STATUS_BAD : top->debug_trap_status;
+  uint64_t icache_accesses = top->debug_icache_accesses;
+  uint64_t icache_hits = top->debug_icache_hits;
+  uint64_t icache_misses = top->debug_icache_misses;
+  uint64_t icache_miss_wait_cycles = top->debug_icache_miss_wait_cycles;
+  uint64_t icache_refill_beats = top->debug_icache_refill_beats;
+  uint64_t icache_hit_rate_x1000 = icache_accesses == 0 ? 0 : (icache_hits * 1000) / icache_accesses;
+  uint64_t icache_amat_x1000 = icache_accesses == 0 ? 0 : ((icache_accesses + icache_miss_wait_cycles) * 1000) / icache_accesses;
   std::printf("NPC_RESULT status=%s reason=%s cycles=%llu insts=%llu pc=0x%08x halted=%u limit=%llu x1=0x%08x a0=0x%08x trap=%u\n",
               result.status.c_str(),
               result.reason.c_str(),
@@ -643,6 +650,14 @@ int main(int argc, char **argv) {
               trap_status);
   std::printf("NPC_CSR mstatus=0x%08x mtvec=0x%08x mepc=0x%08x mcause=0x%08x\n",
               top->debug_mstatus, top->debug_mtvec, top->debug_mepc, top->debug_mcause);
+  std::printf("NPC_ICACHE accesses=%llu hits=%llu misses=%llu miss_wait_cycles=%llu refill_beats=%llu hit_rate_x1000=%llu amat_x1000=%llu\n",
+              static_cast<unsigned long long>(icache_accesses),
+              static_cast<unsigned long long>(icache_hits),
+              static_cast<unsigned long long>(icache_misses),
+              static_cast<unsigned long long>(icache_miss_wait_cycles),
+              static_cast<unsigned long long>(icache_refill_beats),
+              static_cast<unsigned long long>(icache_hit_rate_x1000),
+              static_cast<unsigned long long>(icache_amat_x1000));
 
   bool run_pass = check_pass && result.status == "good";
   if (args.dump_trace || !run_pass) {

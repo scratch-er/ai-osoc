@@ -17,6 +17,11 @@ module Core #(
   output [31:0] debug_mepc,
   output [31:0] debug_mcause,
   output [511:0] debug_regs_flat,
+  output [63:0] debug_icache_accesses,
+  output [63:0] debug_icache_hits,
+  output [63:0] debug_icache_misses,
+  output [63:0] debug_icache_miss_wait_cycles,
+  output [63:0] debug_icache_refill_beats,
   output        commit_valid,
   output [31:0] commit_pc,
   output [31:0] commit_inst,
@@ -113,10 +118,14 @@ module Core #(
   wire [31:0] alu_result;
   wire        ifu_bus_valid;
   wire [31:0] ifu_bus_addr;
+  wire [7:0]  ifu_bus_len;
   wire        ifu_bus_ready;
   wire [31:0] ifu_bus_rdata;
   wire        ifu_bus_error;
-  wire [31:0] ifu_inst_unused;
+  wire        ifu_inst_ready;
+  wire [31:0] ifu_inst;
+  wire        ifu_inst_error;
+  wire        ifu_invalidate;
   wire [31:0] lsu_addr;
   wire [31:0] lsu_rdata;
   wire [31:0] lsu_write_addr;
@@ -141,6 +150,7 @@ module Core #(
   wire        axi_req_valid;
   wire        axi_req_write;
   wire [31:0] axi_req_addr;
+  wire [7:0]  axi_req_len;
   wire [31:0] axi_req_wdata;
   wire [3:0]  axi_req_wmask;
   wire        axi_req_ready;
@@ -171,6 +181,7 @@ module Core #(
   wire        is_ecall = sys_cmd == `NPC_SYS_ECALL;
   wire        is_ebreak = sys_cmd == `NPC_SYS_EBREAK;
   wire        is_mret = sys_cmd == `NPC_SYS_MRET;
+  wire        is_fence_i = sys_cmd == `NPC_SYS_FENCE_I;
   wire        base_trap_request;
   wire        trap_request;
   wire        precise_trap;
@@ -259,13 +270,28 @@ module Core #(
   assign commit_mem_wmask = lsu_write_mask;
   assign commit_mem_rdata = lsu_rdata;
 
+  assign ifu_invalidate = retire_ready && complete_inst && is_fence_i;
+
   Ifu u_ifu (
+    .clock(clock),
+    .reset(reset),
+    .invalidate(ifu_invalidate),
+    .fetch_valid(!inst_valid),
     .pc(fetch_pc),
     .bus_ready(ifu_bus_ready),
     .bus_rdata(ifu_bus_rdata),
+    .bus_error(ifu_bus_error),
     .bus_valid(ifu_bus_valid),
     .bus_addr(ifu_bus_addr),
-    .inst(ifu_inst_unused)
+    .bus_len(ifu_bus_len),
+    .inst_ready(ifu_inst_ready),
+    .inst(ifu_inst),
+    .inst_error(ifu_inst_error),
+    .debug_accesses(debug_icache_accesses),
+    .debug_hits(debug_icache_hits),
+    .debug_misses(debug_icache_misses),
+    .debug_miss_wait_cycles(debug_icache_miss_wait_cycles),
+    .debug_refill_beats(debug_icache_refill_beats)
   );
 
   Idu u_idu (
@@ -361,6 +387,7 @@ module Core #(
   AxiArbiter u_axi_arbiter (
     .ifu_valid(ifu_bus_valid && !inst_valid),
     .ifu_addr(ifu_bus_addr),
+    .ifu_len(ifu_bus_len),
     .ifu_ready(ifu_bus_ready),
     .ifu_rdata(ifu_bus_rdata),
     .ifu_error(ifu_bus_error),
@@ -375,6 +402,7 @@ module Core #(
     .bus_valid(axi_req_valid),
     .bus_write(axi_req_write),
     .bus_addr(axi_req_addr),
+    .bus_len(axi_req_len),
     .bus_wdata(axi_req_wdata),
     .bus_wmask(axi_req_wmask),
     .bus_ready(axi_req_ready),
@@ -388,6 +416,7 @@ module Core #(
     .req_valid(axi_req_valid),
     .req_write(axi_req_write),
     .req_addr(axi_req_addr),
+    .req_len(axi_req_len),
     .req_wdata(axi_req_wdata),
     .req_wmask(axi_req_wmask),
     .req_ready(axi_req_ready),
@@ -458,10 +487,10 @@ module Core #(
       inst_valid <= 1'b0;
       inst_error <= 1'b0;
     end else begin
-      if (!inst_valid && ifu_bus_ready) begin
-        inst_q <= ifu_bus_rdata;
+      if (!inst_valid && ifu_inst_ready) begin
+        inst_q <= ifu_inst;
         inst_valid <= 1'b1;
-        inst_error <= ifu_bus_error;
+        inst_error <= ifu_inst_error;
       end
       if (!halted && retire_ready) begin
         inst_valid <= 1'b0;

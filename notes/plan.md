@@ -606,20 +606,19 @@ Relevant lecture guidance:
 
 Sessions:
 
-1. **P7-S1: Implement icache, `fence.i`, counters, and smoke tests**
-   - Implement the direct-mapped flip-flop instruction cache:
+1. **P7-S1: Implement icache, `fence.i`, counters, and smoke tests** — done.
+   - Implemented the direct-mapped flip-flop instruction cache:
      - capacity: 8 instructions / 32 bytes;
      - line size: 16 bytes / 4 instructions;
      - associativity: 1;
      - all instruction-fetchable addresses treated cacheable.
-   - Add 16-byte AXI burst refill for instruction-cache misses.
-   - Keep data accesses single-beat and leave LSU/CLINT behavior unchanged.
-   - Implement `fence.i` as clearing all icache valid bits.
-   - Add AMAT-related counters: accesses, hits, misses, miss wait cycles, and refill beats.
-   - Emit counters in structured NPC output, preferably near `NPC_RESULT`.
-   - Add or update focused tests for icache smoke, delayed/backpressured refill if supported by the local AXI model, and `fence.i` invalidation if feasible without overcomplicating the harness.
-   - Run a small smoke set immediately: `make -C npc test-clint`, existing directed NPC tests most likely to catch fetch/AXI regressions, and one AM workload such as `hello` with DiffTest.
-   - Exit status: icache is enabled and functional in normal execution; `fence.i` has a directed check or clearly documented validation method; structured counters are emitted; small smoke tests pass.
+   - Added 16-byte AXI burst refill for instruction-cache misses while keeping LSU/data accesses single-beat and leaving CLINT behavior unchanged.
+   - Implemented `fence.i` as clearing all icache valid bits at successful retirement.
+   - Added AMAT-related counters: accesses, hits, misses, miss wait cycles, and refill beats.
+   - Emitted counters in structured `NPC_ICACHE` output near `NPC_RESULT`.
+   - Added focused generated `test-icache` and `test-fencei` checks.
+   - Smoke validation passed: `make -C npc test-icache test-fencei`, NPC directed smoke/regression subset including `test-clint`, `make -C npc test-access-fault`, and NPC `hello` with NEMU event DiffTest.
+   - Exact-cycle Makefile checks were relaxed where icache timing changed cycles; semantic checks remain.
 
 2. **P7-S2: Full regression and bug fixing**
    - Run the full practical regression suite and fix any bugs found.
