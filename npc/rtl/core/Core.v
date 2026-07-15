@@ -29,7 +29,36 @@ module Core #(
   output        commit_mem_wen,
   output [31:0] commit_mem_addr,
   output [31:0] commit_mem_wdata,
-  output [3:0]  commit_mem_wmask
+  output [3:0]  commit_mem_wmask,
+  input         axi_awready,
+  output        axi_awvalid,
+  output [31:0] axi_awaddr,
+  output [3:0]  axi_awid,
+  output [7:0]  axi_awlen,
+  output [2:0]  axi_awsize,
+  output [1:0]  axi_awburst,
+  input         axi_wready,
+  output        axi_wvalid,
+  output [31:0] axi_wdata,
+  output [3:0]  axi_wstrb,
+  output        axi_wlast,
+  output        axi_bready,
+  input         axi_bvalid,
+  input  [1:0]  axi_bresp,
+  input  [3:0]  axi_bid,
+  input         axi_arready,
+  output        axi_arvalid,
+  output [31:0] axi_araddr,
+  output [3:0]  axi_arid,
+  output [7:0]  axi_arlen,
+  output [2:0]  axi_arsize,
+  output [1:0]  axi_arburst,
+  output        axi_rready,
+  input         axi_rvalid,
+  input  [1:0]  axi_rresp,
+  input  [31:0] axi_rdata,
+  input         axi_rlast,
+  input  [3:0]  axi_rid
 );
 
   wire [31:0] reset_vector = (reset_pc == 32'd0) ? RESET_PC : reset_pc;
@@ -37,9 +66,11 @@ module Core #(
   reg [31:0] pc;
   reg        halted;
   reg [1:0]  trap_status;
+  reg [31:0] inst_q;
+  reg        inst_valid;
 
   wire [31:0] fetch_pc = reset ? reset_vector : pc;
-  wire [31:0] inst;
+  wire [31:0] inst = inst_q;
   wire [6:0]  opcode;
   wire [4:0]  rd;
   wire [2:0]  funct3;
@@ -81,6 +112,7 @@ module Core #(
   wire [31:0] ifu_bus_addr;
   wire        ifu_bus_ready;
   wire [31:0] ifu_bus_rdata;
+  wire [31:0] ifu_inst_unused;
   wire [31:0] lsu_addr;
   wire [31:0] lsu_rdata;
   wire [31:0] lsu_write_addr;
@@ -93,6 +125,13 @@ module Core #(
   wire [3:0]  lsu_bus_wmask;
   wire        lsu_bus_ready;
   wire [31:0] lsu_bus_rdata;
+  wire        axi_req_valid;
+  wire        axi_req_write;
+  wire [31:0] axi_req_addr;
+  wire [31:0] axi_req_wdata;
+  wire [3:0]  axi_req_wmask;
+  wire        axi_req_ready;
+  wire [31:0] axi_req_rdata;
   wire [31:0] csr_rdata;
   wire [31:0] mtvec;
   wire [31:0] mepc;
@@ -153,10 +192,10 @@ module Core #(
   assign trap_request = !decode_legal || pc_exception || mem_misaligned || is_ecall || is_ebreak;
   assign precise_trap = trap_request && mtvec != 32'd0;
   assign bad_without_vector = trap_request && mtvec == 32'd0;
-  assign complete_inst = decode_legal && !mem_misaligned && !pc_exception && !is_ecall && !precise_trap;
+  assign complete_inst = inst_valid && decode_legal && !mem_misaligned && !pc_exception && !is_ecall && !precise_trap;
   assign mem_access = complete_inst && (mem_ren || mem_wen);
   assign mem_ready = !mem_access || lsu_bus_ready;
-  assign retire_ready = !reset && !halted && ifu_bus_ready && mem_ready;
+  assign retire_ready = !reset && !halted && inst_valid && mem_ready;
   assign wb_wen = complete_inst && mem_ready && writes_rd && !is_mret;
   assign lsu_wen = complete_inst && mem_wen;
 
@@ -196,21 +235,7 @@ module Core #(
     .bus_rdata(ifu_bus_rdata),
     .bus_valid(ifu_bus_valid),
     .bus_addr(ifu_bus_addr),
-    .inst(inst)
-  );
-
-  MemIf #(
-    .LATENCY_PLUSARG(0)
-  ) u_ifu_mem (
-    .clock(clock),
-    .reset(reset),
-    .valid(ifu_bus_valid),
-    .write(1'b0),
-    .addr(ifu_bus_addr),
-    .wdata(32'd0),
-    .wmask(4'd0),
-    .ready(ifu_bus_ready),
-    .rdata(ifu_bus_rdata)
+    .inst(ifu_inst_unused)
   );
 
   Idu u_idu (
@@ -290,16 +315,66 @@ module Core #(
     .write_mask(lsu_write_mask)
   );
 
-  MemIf u_lsu_mem (
+  AxiArbiter u_axi_arbiter (
+    .ifu_valid(ifu_bus_valid && !inst_valid),
+    .ifu_addr(ifu_bus_addr),
+    .ifu_ready(ifu_bus_ready),
+    .ifu_rdata(ifu_bus_rdata),
+    .lsu_valid(lsu_bus_valid),
+    .lsu_write(lsu_bus_write),
+    .lsu_addr(lsu_bus_addr),
+    .lsu_wdata(lsu_bus_wdata),
+    .lsu_wmask(lsu_bus_wmask),
+    .lsu_ready(lsu_bus_ready),
+    .lsu_rdata(lsu_bus_rdata),
+    .bus_valid(axi_req_valid),
+    .bus_write(axi_req_write),
+    .bus_addr(axi_req_addr),
+    .bus_wdata(axi_req_wdata),
+    .bus_wmask(axi_req_wmask),
+    .bus_ready(axi_req_ready),
+    .bus_rdata(axi_req_rdata)
+  );
+
+  AxiMaster u_axi_master (
     .clock(clock),
     .reset(reset),
-    .valid(lsu_bus_valid),
-    .write(lsu_bus_write),
-    .addr(lsu_bus_addr),
-    .wdata(lsu_bus_wdata),
-    .wmask(lsu_bus_wmask),
-    .ready(lsu_bus_ready),
-    .rdata(lsu_bus_rdata)
+    .req_valid(axi_req_valid),
+    .req_write(axi_req_write),
+    .req_addr(axi_req_addr),
+    .req_wdata(axi_req_wdata),
+    .req_wmask(axi_req_wmask),
+    .req_ready(axi_req_ready),
+    .req_rdata(axi_req_rdata),
+    .axi_awready(axi_awready),
+    .axi_awvalid(axi_awvalid),
+    .axi_awaddr(axi_awaddr),
+    .axi_awid(axi_awid),
+    .axi_awlen(axi_awlen),
+    .axi_awsize(axi_awsize),
+    .axi_awburst(axi_awburst),
+    .axi_wready(axi_wready),
+    .axi_wvalid(axi_wvalid),
+    .axi_wdata(axi_wdata),
+    .axi_wstrb(axi_wstrb),
+    .axi_wlast(axi_wlast),
+    .axi_bready(axi_bready),
+    .axi_bvalid(axi_bvalid),
+    .axi_bresp(axi_bresp),
+    .axi_bid(axi_bid),
+    .axi_arready(axi_arready),
+    .axi_arvalid(axi_arvalid),
+    .axi_araddr(axi_araddr),
+    .axi_arid(axi_arid),
+    .axi_arlen(axi_arlen),
+    .axi_arsize(axi_arsize),
+    .axi_arburst(axi_arburst),
+    .axi_rready(axi_rready),
+    .axi_rvalid(axi_rvalid),
+    .axi_rresp(axi_rresp),
+    .axi_rdata(axi_rdata),
+    .axi_rlast(axi_rlast),
+    .axi_rid(axi_rid)
   );
 
   Csr u_csr (
@@ -332,14 +407,23 @@ module Core #(
       pc <= reset_vector;
       halted <= 1'b0;
       trap_status <= `NPC_STATUS_RUNNING;
-    end else if (!halted && ifu_bus_ready && mem_ready) begin
-      if (bad_without_vector) begin
-        halted <= 1'b1;
-        trap_status <= `NPC_STATUS_BAD;
-      end else if (precise_trap) begin
-        pc <= mtvec;
-      end else begin
-        pc <= normal_next_pc;
+      inst_q <= 32'd0;
+      inst_valid <= 1'b0;
+    end else begin
+      if (!inst_valid && ifu_bus_ready) begin
+        inst_q <= ifu_bus_rdata;
+        inst_valid <= 1'b1;
+      end
+      if (!halted && retire_ready) begin
+        inst_valid <= 1'b0;
+        if (bad_without_vector) begin
+          halted <= 1'b1;
+          trap_status <= `NPC_STATUS_BAD;
+        end else if (precise_trap) begin
+          pc <= mtvec;
+        end else begin
+          pc <= normal_next_pc;
+        end
       end
     end
   end
