@@ -38,6 +38,12 @@ f(30) f(31)
 #define OFFSET_EPC    ((NR_REGS + 2) * XLEN)
 
 .align 3
+.globl __am_kcontext_start
+__am_kcontext_start:
+  mv a0, s0
+  jalr s1
+
+.align 3
 .globl __am_asm_trap
 __am_asm_trap:
   addi sp, sp, -CONTEXT_SIZE
@@ -51,9 +57,11 @@ __am_asm_trap:
   STORE t0, OFFSET_CAUSE(sp)
   STORE t1, OFFSET_STATUS(sp)
   STORE t2, OFFSET_EPC(sp)
+  STORE sp, OFFSET_SP(sp)
 
   mv a0, sp
   call __am_irq_handle
+  mv sp, a0
 
   LOAD t1, OFFSET_STATUS(sp)
   LOAD t2, OFFSET_EPC(sp)

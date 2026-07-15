@@ -8,6 +8,10 @@ Context* __am_irq_handle(Context *c) {
   if (user_handler) {
     Event ev = {0};
     switch (c->mcause) {
+      case 11:
+        ev.event = (c->GPR1 == (uintptr_t)-1) ? EVENT_YIELD : EVENT_SYSCALL;
+        c->mepc += 4;
+        break;
       default: ev.event = EVENT_ERROR; break;
     }
 
@@ -19,6 +23,7 @@ Context* __am_irq_handle(Context *c) {
 }
 
 extern void __am_asm_trap(void);
+extern void __am_kcontext_start(void);
 
 bool cte_init(Context*(*handler)(Event, Context*)) {
   // initialize exception entry
@@ -31,7 +36,12 @@ bool cte_init(Context*(*handler)(Event, Context*)) {
 }
 
 Context *kcontext(Area kstack, void (*entry)(void *), void *arg) {
-  return NULL;
+  Context *c = (Context *)kstack.end - 1;
+  memset(c, 0, sizeof(Context));
+  c->mepc = (uintptr_t)__am_kcontext_start;
+  c->gpr[8] = (uintptr_t)arg;    // s0
+  c->gpr[9] = (uintptr_t)entry;  // s1
+  return c;
 }
 
 void yield() {

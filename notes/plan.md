@@ -389,12 +389,13 @@ Sessions:
    - Validate with existing AM tests rather than inventing a new klib workload.
    - Exit when essential AM workloads no longer fail because of missing libc/klib routines.
 
-6. **P4-S6: CTE validation with existing `am-kernels` workloads**
-   - Audit existing Phase 3 trap/CSR behavior against AM CTE needs: `ecall`, `ebreak`, `mret`, `mtvec`, `mepc`, `mcause`, `mstatus`, and register save/restore expectations.
-   - Implement or repair the `riscv32e-npc` CTE assembly/C glue only as needed by existing AM workloads: context structure, trap vector installation, trap frame save/restore, `yield()`, event classification, handler call/return, and `kcontext()`.
-   - Use existing `am-kernels` CTE workloads such as `yield-os` for validation; do not create a new custom CTE test.
-   - Use DiffTest and bounded commit/trace dumps for mismatches around trap entry/return.
-   - Exit when the selected existing CTE workload passes or reaches a narrow documented blocker.
+6. **P4-S6: CTE validation with existing `am-kernels` workloads** — completed
+   - Fixed the shared RISC-V AM `Context` layout to match the trap frame saved by `trap.S`.
+   - Implemented RISC-V CTE yield classification, `mepc` advance after `ecall`, trap-handler context switching, and `kcontext()` for both NPC and NEMU AM targets.
+   - Added a shared `__am_kcontext_start` assembly trampoline that starts kernel contexts with `a0 = arg` and `jalr entry`.
+   - Validated with existing `am-kernels/kernels/yield-os` and `am-kernels/kernels/thread-os`; no custom CTE workload was added.
+   - Added the NPC AM MPE glue needed by `thread-os`: `riscv/npc/mpe.c` is now linked for `ARCH=riscv32e-npc`, calls the bootstrap entry on the single simulated CPU, reports `cpu_count() == 1`/`cpu_current() == 0`, and provides a simple single-core `atomic_xchg()`.
+   - Exit status: `yield-os` switches between the two contexts and prints `ABAB` under bounded NPC/NEMU runs; `thread-os` enters its thread loop and prints `Thread-B on CPU #0` under a bounded NPC run. These workloads then hit the expected instruction/cycle limits because they are intentionally infinite. NPC runs use NEMU event DiffTest and report no DiffTest failure before the bound.
 
 7. **P4-S7: Workload regression and Phase 4 closeout**
    - Re-run the Phase 4 standard set:

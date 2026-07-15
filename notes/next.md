@@ -5,9 +5,9 @@ Current state:
 - Phase 1 (`NEMU and AM Foundation`) is closed through Session 8.
 - Phase 2 is complete.
 - Phase 3 (`RV32E_Zicsr Functional Core`) is complete through `P3-S4: Progressive RV32E cpu-tests regression and DiffTest hardening`.
-- Phase 4 is complete through `P4-S5: Klib/DiffTest completion for UART and timer workloads`.
+- Phase 4 is complete through `P4-S6: CTE validation with existing am-kernels workloads`.
 - NPC implementation style is **Verilog**.
-- Repository status before Phase 2 already had untracked `.DS_Store`, `activate`, and top-level `.gitignore`; leave them alone unless the user explicitly asks.
+- Repository status before Phase 2 already had untracked `.DS_Store`, `activate`, and top-level `.gitignore`; leave them alone unless the user explicitly asks. Current `git status --short` still shows untracked top-level `.gitignore`.
 - Top-level `build/` contains generated AM/NPC images, logs, and the ignored temporary `build/sonnet-libc-src` clone used as the Sonnet libc source reference; do not commit generated artifacts unless explicitly requested.
 
 Toolchain/config reminders:
@@ -22,20 +22,19 @@ Toolchain/config reminders:
 - `make -C nemu menuconfig` is interactive; do not run it in automation.
 - NEMU REF shared object is `nemu/build/riscv32-nemu-interpreter-so` and exports the CommitEvent APIs used by NPC DiffTest.
 
-P4-S5 completed work:
+P4-S6 completed work:
 
-- Replaced the small AM `stdio.c` formatter with a Sonnet-libc-derived/adapted implementation supporting the formatting needed by timer/UART workloads, including `%02d`, width, sign flags, `l`/`ll` integer length modifiers, `%u`, `%x`/`%X`, `%p`, and `%o`.
-- Added the remaining Sonnet-libc-derived klib pieces needed for a usable libc subset instead of leaving them as stubs:
-  - new `abstract-machine/klib/src/ctype.c` implements `is*()` predicates plus `tolower()`/`toupper()`;
-  - `abstract-machine/klib/src/stdlib.c` now implements `atol`, `atoll`, `strtol`, `strtoll`, `strtoul`, `strtoull`, heap-backed `malloc`, `free`, `exit`, and `abort`;
-  - `abstract-machine/klib/include/klib.h` declares the added libc APIs and `RAND_MAX`.
-- Added NEMU REF aliases for NPC MMIO addresses so event DiffTest can execute NPC AM UART/timer workloads:
-  - UART TX at `0x10000000` is accepted without duplicating host output when NEMU is used as REF.
-  - NPC CLINT window `0x02000000..0x0200ffff` is accepted.
-  - `mtime`/`mtimeh` at `0x0200bff8`/`0x0200bffc` return deterministic retired-instruction ticks matching the NPC temporary timer model.
-- Adjusted the NPC harness to set the temporary timer value for the next retiring instruction before combinational evaluation, so MMIO load commit data matches the NEMU REF event at retirement.
-- Rebuilt both NEMU native executable and NEMU REF shared object after the REF alias change.
-- Confirmed UART and timer workloads now run under NPC event DiffTest without mismatch. Expected terminal failures remain only from optional devices or intentional bounded infinite RTC loops.
+- Fixed the shared RISC-V AM `Context` layout in `abstract-machine/am/include/arch/riscv.h` to match the trap frame saved by `trap.S`: GPRs first, then `mcause`, `mstatus`, and `mepc`.
+- Updated `GPR2`/`GPR3`/`GPR4`/`GPRx` macros to name `a0`/`a1`/`a2` consistently instead of all aliasing `gpr[0]`.
+- Implemented RISC-V AM CTE behavior for both `riscv32e-npc` and `riscv32-nemu` AM targets:
+  - classify machine `ecall` cause 11 as `EVENT_YIELD` when `GPR1 == -1`, otherwise `EVENT_SYSCALL`;
+  - advance `mepc` by 4 after handled `ecall` so `mret` resumes after the trapping instruction;
+  - allow `__am_irq_handle()` to return a different `Context *` and make `trap.S` switch `sp` to that returned context;
+  - save the trap-frame `sp` slot for completeness;
+  - implement `kcontext()` by placing a zeroed `Context` at the top of the kernel stack and using `s0` for `arg`, `s1` for `entry`.
+- Added `__am_kcontext_start` trampolines in both `abstract-machine/am/src/riscv/npc/trap.S` and `abstract-machine/am/src/riscv/nemu/trap.S`; the trampoline runs `mv a0, s0; jalr s1`.
+- Linked the NPC AM target against `abstract-machine/am/src/riscv/npc/mpe.c` instead of the dummy MPE stub, then implemented the single-core MPE hooks needed by `thread-os`: call the bootstrap entry from `mpe_init()`, report one CPU/current CPU 0, and provide a simple single-core `atomic_xchg()`.
+- Validated CTE with the existing `am-kernels/kernels/yield-os` and `am-kernels/kernels/thread-os` workloads. No custom workload was added.
 
 Validated commands and results:
 
@@ -45,17 +44,25 @@ Validated commands and results:
    make -C nemu ISA=riscv32 SHARE=1
    ```
 
-   Result: passed; rebuilt `nemu/build/riscv32-nemu-interpreter-so`.
+   Result: passed/no-op (`make: Nothing to be done for 'app'.`).
 
-2. Rebuild NPC simulator:
+2. Rebuild NEMU native executable:
 
    ```sh
-   make -C npc
+   make -C nemu
    ```
 
-   Result: passed.
+   Result: passed/no-op (`make: Nothing to be done for 'app'.`).
 
-3. NPC `hello` with UART and NEMU event DiffTest:
+3. Full NPC directed regression:
+
+   ```sh
+   make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest
+   ```
+
+   Result: passed by Makefile expectations. Some subtests intentionally return BAD/limit to validate failure/debug paths, so raw logs include expected `status=bad`/`status=limit` lines.
+
+4. NPC `hello` with UART and NEMU event DiffTest:
 
    ```sh
    make -C am-kernels/kernels/hello ARCH=riscv32e-npc \
@@ -64,15 +71,64 @@ Validated commands and results:
      NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
    ```
 
-   Result: passed; printed:
+   Result: passed; printed `Hello, AbstractMachine!`, `mainargs = ''.`, and:
 
    ```text
-   Hello, AbstractMachine!
-   mainargs = ''.
    NPC_RESULT status=good reason=good_trap cycles=465 insts=465 pc=0x800000c4 halted=1 limit=200000 x1=0x800000c0 a0=0x00000000 trap=1
    ```
 
-4. NPC `am-tests mainargs=d` with timer/UART and NEMU event DiffTest:
+5. NPC `yield-os` CTE smoke with NEMU event DiffTest:
+
+   ```sh
+   make -C am-kernels/kernels/yield-os ARCH=riscv32e-npc \
+     AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+     CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=2000000 \
+     NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+   ```
+
+   Result: expected bounded run. It printed `ABAB`, reported no `NPC_DIFFTEST status=fail`, then hit the cycle limit because `yield-os` is intentionally infinite:
+
+   ```text
+   NPC_RESULT status=limit reason=cycle_limit cycles=2000000 insts=2000000 ...
+   ```
+
+   The command exits nonzero because the AM/NPC run path treats hitting the bound as a failed run, but this is the expected terminal condition for this workload.
+
+6. NPC `thread-os` CTE/MPE smoke with NEMU event DiffTest:
+
+   ```sh
+   make -C am-kernels/kernels/thread-os ARCH=riscv32e-npc \
+     AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+     CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=5000000 \
+     NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+   ```
+
+   Result: expected bounded run. It printed repeated `Thread-B on CPU #0`, reported no `NPC_DIFFTEST status=fail`, then hit the cycle limit because `thread-os` is intentionally infinite:
+
+   ```text
+   NPC_RESULT status=limit reason=cycle_limit cycles=5000000 insts=5000000 ...
+   ```
+
+   With `cpu_count() == 1`, the scheduler selects the subset of tasks whose index modulo CPU count matches CPU 0; after the bootstrap yield it starts at task B and keeps running it because there is no timer interrupt/preemption in Phase 4.
+
+7. NEMU `yield-os` CTE smoke:
+
+   ```sh
+   make -C am-kernels/kernels/yield-os ARCH=riscv32-nemu \
+     AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+     NEMU_HOME=/Users/venti/Workspace/ai-ysyx/nemu \
+     CROSS_COMPILE=riscv64-elf- NEMU_MAX_INSTS=2000000 run
+   ```
+
+   Result: expected bounded run. It printed `ABAB`, then hit the instruction limit because `yield-os` is intentionally infinite:
+
+   ```text
+   NEMU_RESULT status=limit state=5 halt_pc=0x80000098 halt_ret=1 insts=2000000 limit=2000000
+   ```
+
+   The command exits nonzero because the AM/NEMU run path treats hitting the bound as a failed run, but this is the expected terminal condition for this workload.
+
+8. NPC `am-tests mainargs=d` with timer/UART and NEMU event DiffTest:
 
    ```sh
    make -C am-kernels/tests/am-tests ARCH=riscv32e-npc \
@@ -81,20 +137,14 @@ Validated commands and results:
      NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so mainargs=d run
    ```
 
-   Result: DiffTest ran through the UART/timer section with no mismatch, printed:
+   Result: same expected Phase 4 status as before. DiffTest ran through UART/timer with no mismatch, printed `Loop 10^7 time elapse: 500 ms`, then panicked on optional/unimplemented IOE register probing:
 
    ```text
-   heap = [8009e000, 88000000)
-   Input device test skipped.
-   Loop 10^7 time elapse: 500 ms
    AM Panic: access nonexist register @ .../abstract-machine/am/src/riscv/npc/ioe.c:26
-   NEMU_RESULT status=bad state=2 halt_pc=0x800010a4 halt_ret=1 insts=50013020 limit=0
-   NPC_RESULT status=bad reason=bad_trap cycles=50013020 insts=50013020 pc=0x800010a4 halted=1 limit=80000000 ...
+   NPC_RESULT status=bad reason=bad_trap cycles=50013020 insts=50013020 pc=0x800010a4 ...
    ```
 
-   The final BAD trap is expected for this slice: optional device probing after timer/devscan still reaches an unimplemented IOE register. UART/timer DiffTest itself works.
-
-5. NPC `am-tests mainargs=t` with timer/UART and NEMU event DiffTest:
+9. NPC `am-tests mainargs=t` with timer/UART and NEMU event DiffTest:
 
    ```sh
    make -C am-kernels/tests/am-tests ARCH=riscv32e-npc \
@@ -103,22 +153,13 @@ Validated commands and results:
      NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so mainargs=t run
    ```
 
-   Result: DiffTest ran with no mismatch until the expected bound on the intentionally infinite RTC test; printed:
+   Result: same expected Phase 4 status as before. Printed `1900-1-1 00:00:01 GMT (1 second).`, then hit the cycle limit because the RTC test is intentionally infinite:
 
    ```text
-   1900-1-1 00:00:01 GMT (1 second).
    NPC_RESULT status=limit reason=cycle_limit cycles=120000000 insts=120000000 ...
    ```
 
-6. NEMU native build:
-
-   ```sh
-   make -C nemu
-   ```
-
-   Result: passed.
-
-7. NEMU `hello` with UART output:
+10. NEMU `hello` with UART output:
 
    ```sh
    make -C am-kernels/kernels/hello ARCH=riscv32-nemu \
@@ -133,30 +174,7 @@ Validated commands and results:
    NEMU_RESULT status=good state=2 halt_pc=0x800000c4 halt_ret=0 insts=352 limit=200000
    ```
 
-8. NEMU `am-tests mainargs=t` bounded RTC smoke:
-
-   ```sh
-   make -C am-kernels/tests/am-tests ARCH=riscv32-nemu \
-     AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
-     NEMU_HOME=/Users/venti/Workspace/ai-ysyx/nemu \
-     CROSS_COMPILE=riscv64-elf- NEMU_MAX_INSTS=120000000 mainargs=t run
-   ```
-
-   Result: printed `1900-1-1 00:00:01 GMT (1 second).` and hit the expected instruction limit because `rtc_test()` is intentionally infinite:
-
-   ```text
-   NEMU_RESULT status=limit state=5 halt_pc=0x8000009c halt_ret=1 insts=120000000 limit=120000000
-   ```
-
-9. Full NPC directed regression:
-
-   ```sh
-   make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest
-   ```
-
-   Result: passed by Makefile expectations. Some subtests intentionally return BAD/limit to validate failure/debug paths, so raw logs include expected `status=bad`/`status=limit` lines.
-
-10. Full 35-test `cpu-tests` sweep on NPC with NEMU event DiffTest:
+11. Full 35-test `cpu-tests` sweep on NPC with NEMU event DiffTest:
 
    ```sh
    ROOT=/Users/venti/Workspace/ai-ysyx
@@ -179,8 +197,10 @@ Known caveats:
 - NEMU and NPC Phase 4 timers are still temporary retired-instruction models, not physical cycle-based CLINT/RTC devices. The final physical CLINT from `specs/core.md` must wait until device-aware DiffTest/MMIO replay is available.
 - NEMU REF now has narrow NPC MMIO aliases only to keep Phase 4 event DiffTest usable for UART/timer workloads. This is not the final Phase 5 device-aware MMIO replay design.
 - NEMU native device support is currently UART/timer-only. Optional keyboard/VGA/audio/disk/sdcard remain disabled for this slice.
-- NEMU/NPC `am-tests mainargs=d` still panic after the timer/devscan section because optional device IOE entries are not implemented. This is outside the UART/timer scope.
+- NEMU/NPC `am-tests mainargs=d` still panic after the timer/devscan section because optional device IOE entries are not implemented. This is outside the UART/timer/CTE scope.
 - NEMU/NPC `am-tests mainargs=t` is intentionally infinite after printing periodically; use bounded runs and look for visible output/time progression.
+- NEMU/NPC `yield-os` is intentionally infinite; use bounded runs and look for alternating output (`ABAB...`) plus no DiffTest mismatch.
+- NPC `thread-os` is intentionally infinite; in the current single-core/no-interrupt Phase 4 setup, use bounded runs and look for `Thread-B on CPU #0` plus no DiffTest mismatch. It does not preemptively rotate among all tasks because timer interrupts are still unsupported.
 - The current precise trap path is single-cycle and vector-only (`pc = mtvec`); interrupts are still unsupported by design.
 - `fence.i` is a visible no-state hook for now; actual icache clearing waits for Phase 7.
 - NPC CommitEvent still does not carry memory or CSR access summaries for DiffTest comparison. Store metadata is currently exposed separately only for harness-side UART ordering.
@@ -191,27 +211,31 @@ Known caveats:
 
 Next work:
 
-Start `P4-S6: CTE validation with existing am-kernels workloads`.
+Start `P4-S7: Workload regression and Phase 4 closeout`.
 
-Concrete P4-S6 plan:
+Concrete P4-S7 plan:
 
-1. Audit the current `riscv32e-npc` AM CTE files and existing `yield-os` workload entry points.
-2. Implement or repair only the CTE pieces needed by existing workloads: trap vector install, trap frame save/restore, `yield()`, event classification, handler return, and `kcontext()` if required.
-3. Validate with existing `am-kernels/kernels/yield-os`, not a custom workload.
-4. Keep current UART/timer DiffTest behavior intact; rerun the focused UART/timer DiffTest smokes after CTE changes.
-5. Re-run NPC directed regression and full or representative cpu-tests with DiffTest after changes.
-6. Update `notes/next.md` with exact pass/fail results and the next P4 entry point.
+1. Re-run the Phase 4 standard set and record a concise pass/fail table:
+   - NPC directed regression;
+   - full NPC cpu-tests with NEMU event DiffTest;
+   - NPC/NEMU `hello`;
+   - NPC/NEMU timer smokes;
+   - NPC/NEMU `yield-os` bounded CTE smokes;
+   - NPC `thread-os` bounded CTE/MPE smoke.
+2. Update `npc/README.md` only if user-facing run commands or flags have changed; no README update was needed in P4-S6.
+3. Decide whether Phase 4 is complete enough to move into Phase 5 (`System Bus, AXI4 Integration, and Device-Aware DiffTest`).
+4. Keep optional devices, physical CLINT, interrupts, RT-Thread broad debugging, and AXI work out of Phase 4 unless the user revises the scope.
 
 Relevant files:
 
 - `notes/plan.md`
 - `notes/next.md`
-- `abstract-machine/klib/src/stdio.c`
-- `nemu/src/memory/paddr.c`
-- `npc/csrc/main.cpp`
+- `abstract-machine/am/include/arch/riscv.h`
 - `abstract-machine/am/src/riscv/npc/cte.c`
 - `abstract-machine/am/src/riscv/npc/trap.S`
-- `abstract-machine/am/src/riscv/npc/context.c`
-- `abstract-machine/am/src/riscv/npc/timer.c`
-- `abstract-machine/am/src/riscv/npc/ioe.c`
-- `am-kernels/kernels/yield-os/Makefile`
+- `abstract-machine/am/src/riscv/npc/mpe.c`
+- `abstract-machine/am/src/riscv/nemu/cte.c`
+- `abstract-machine/am/src/riscv/nemu/trap.S`
+- `abstract-machine/scripts/platform/npc.mk`
+- `am-kernels/kernels/yield-os/yield-os.c`
+- `am-kernels/kernels/thread-os/thread-os.c`
