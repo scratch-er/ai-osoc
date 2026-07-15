@@ -597,37 +597,54 @@ Exit criteria:
 
 ## Phase 7: Instruction Cache and `fence.i`
 
-Goal: implement the spec-required instruction cache and validate both function and performance counters.
+Goal: implement the spec-required instruction cache, validate it against the existing workload suite, and leave enough performance-counter data for Phase 8.
 
 Relevant lecture guidance:
 
 - B4 performance counters, icache, AMAT, formal verification, burst refill.
 - B5 `fence.i` pipeline caution for future pipeline phase.
 
-Tasks:
+Sessions:
 
-1. Implement a flip-flop direct-mapped icache:
-   - capacity: 8 instructions / 32 bytes
-   - line size: 16 bytes / 4 instructions
-   - associativity: 1
-   - all instruction-fetchable addresses treated cacheable
-2. Implement AXI burst refill for 16-byte cache lines over 32-bit data bus.
-3. Implement `fence.i` as icache clear.
-4. Add performance counters for icache AMAT:
-   - accesses
-   - hits
-   - misses
-   - miss wait cycles / total miss time
-   - refill beats
-5. Validate cache functionality against uncached fetch behavior.
-6. Where practical, add a small formal or randomized test for icache correctness under delayed AXI responses.
-7. Compare RTL miss counts with a simple `cachesim` if the trace flow is available.
+1. **P7-S1: Implement icache, `fence.i`, counters, and smoke tests**
+   - Implement the direct-mapped flip-flop instruction cache:
+     - capacity: 8 instructions / 32 bytes;
+     - line size: 16 bytes / 4 instructions;
+     - associativity: 1;
+     - all instruction-fetchable addresses treated cacheable.
+   - Add 16-byte AXI burst refill for instruction-cache misses.
+   - Keep data accesses single-beat and leave LSU/CLINT behavior unchanged.
+   - Implement `fence.i` as clearing all icache valid bits.
+   - Add AMAT-related counters: accesses, hits, misses, miss wait cycles, and refill beats.
+   - Emit counters in structured NPC output, preferably near `NPC_RESULT`.
+   - Add or update focused tests for icache smoke, delayed/backpressured refill if supported by the local AXI model, and `fence.i` invalidation if feasible without overcomplicating the harness.
+   - Run a small smoke set immediately: `make -C npc test-clint`, existing directed NPC tests most likely to catch fetch/AXI regressions, and one AM workload such as `hello` with DiffTest.
+   - Exit status: icache is enabled and functional in normal execution; `fence.i` has a directed check or clearly documented validation method; structured counters are emitted; small smoke tests pass.
+
+2. **P7-S2: Full regression and bug fixing**
+   - Run the full practical regression suite and fix any bugs found.
+   - Cover NPC directed regression, including smoke/directed tests, memory-size/access-fault/CSR/DiffTest/CLINT tests.
+   - Run the full 35-test `cpu-tests` sweep with NEMU event DiffTest.
+   - Run AM/NPC workloads: `hello`, timer/devscan bounded smoke, bounded `yield-os`, bounded `thread-os`, and RT-Thread with DiffTest.
+   - Check that UART output is still ordered and not duplicated, CLINT DiffTest replay still works, access faults and misalignment behavior remain correct, and counters are internally consistent.
+   - Exit status: all previous Phase 6 functional tests pass, or expected bounded runs remain narrowly documented; no known icache correctness regression remains; counter output is stable enough for Phase 8.
+
+3. **P7-S3: Re-check Phase 7 exit criteria and plan Phase 8**
+   - Re-run a focused confirmation set after any fixes from P7-S2.
+   - Check Phase 7 exit criteria explicitly.
+   - Record exact validation commands, pass/fail results, known caveats, and representative counter output.
+   - Update `notes/plan.md` and `notes/next.md`.
+   - Plan Phase 8 around measurement/PPA baselining: workloads, counters, commands, and what counts as a useful baseline.
+   - Commit after user approval.
+   - Exit status: Phase 7 is closed in notes; Phase 8 has a concrete measurement plan; the next session can start from notes without hidden context.
 
 Exit criteria:
 
 - All previous functional tests pass with icache enabled.
 - `fence.i` invalidates cached instructions.
+- Instruction-cache refill uses 16-byte AXI bursts.
 - AMAT counters are emitted and internally consistent.
+- Phase 8 has reproducible commands and representative counter output to start from.
 
 ## Phase 8: Performance Measurement and PPA Baselines
 

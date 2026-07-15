@@ -7,14 +7,10 @@ Current state:
 - Phase 3 (`RV32E_Zicsr Functional Core`) is complete through `P3-S4: Progressive RV32E cpu-tests regression and DiffTest hardening`.
 - Phase 4 is complete and closed through `P4-S9: Workload regression and Phase 4 closeout`.
 - Phase 5 is closed through `P5-S6: Full Phase 5 regression and closeout`.
-- Phase 6 is complete through `P6-S2: Timer/DiffTest/workload validation`, but **not committed yet**. User asked: after everything works, let them revise, then make a commit.
-- Phase 5 commits:
-  - `a007e71 Refactor NEMU physical memory regions`
-  - `e3e3002 Add MMIO replay for NPC DiffTest`
-  - `e43f998 Add NPC internal memory request boundary`
-  - `a15ed30 Add NPC AXI master simulation path`
-  - `fe55944 Handle AXI access faults in DiffTest`
-- Additional uncommitted cleanup before Phase 6: `nemu/src/memory/vaddr.c` fixes native NEMU MMIO access checks so native UART/RTC accesses are not mistaken for access faults.
+- Phase 6 (`Physical Built-in CLINT, UART Path, and RT-Thread Stability`) is closed and committed:
+  - `8170098 Implement physical CLINT`
+  - `84d258d Validate physical CLINT workloads`
+- Phase 7 (`Instruction Cache and fence.i`) is planned as three AI-oriented sessions in `notes/plan.md`.
 - NPC implementation style is **Verilog**.
 - Repository status before Phase 2 already had untracked `.DS_Store`, `activate`, and top-level `.gitignore`; leave them alone unless the user explicitly asks. Current `git status --short` still shows untracked top-level `.gitignore`.
 - Top-level `build/` contains generated AM/NPC images, logs, and the ignored temporary `build/sonnet-libc-src` clone used as the Sonnet libc source reference; do not commit generated artifacts unless explicitly requested.
@@ -34,11 +30,11 @@ Toolchain/config reminders:
 - `make -C nemu menuconfig` is interactive; do not run it in automation.
 - NEMU REF shared object is `nemu/build/riscv32-nemu-interpreter-so` and exports CommitEvent/MMIO replay APIs used by NPC DiffTest.
 
-## Phase 6 status
+## Phase 6 closeout status
 
-`P6-S1: Physical CLINT design and implementation` is complete. The final approved CLINT topology is still recorded in `notes/clint-implementation-plan.md`.
+Phase 6 exit criteria are met.
 
-Implemented behavior carried into P6-S2:
+Implemented CLINT behavior:
 
 - `npc/rtl/core/Clint.v` is a physical RTL CLINT block with a 64-bit `mtime` that resets to zero and increments once per non-reset core clock.
 - `npc/rtl/core/Core.v` routes LSU CLINT-window accesses through a combinational bypass before `AxiArbiter`; IFU, `AxiArbiter.v`, and `AxiMaster.v` were left unchanged.
@@ -48,25 +44,7 @@ Implemented behavior carried into P6-S2:
 - `npc/csrc/main.cpp` synthesizes DiffTest MMIO replay records for committed CLINT reads from DUT RTL load data, while UART writes and C++ memory fallback/debug behavior remain available.
 - NEMU NPC-device CLINT acceptance covers the full project window `0x02000000..0x0200ffff` for replay compatibility.
 
-## P6-S2 changes made in this session
-
-Changed files:
-
-- `npc/tests/make-clint-bin.py`
-  - Strengthened the generated CLINT test program.
-  - It now reads `mtimeh`, `mtime`, then `mtimeh` again to mirror the robust AM 64-bit timer read ordering.
-  - It checks the high word remains stable in this short smoke, the low word advances, an ignored CLINT-window write has no error, and an unimplemented CLINT-window read returns zero.
-  - It avoids using `a0` (`x10`) for pass-state bookkeeping so the final `ebreak` remains a good trap.
-- `npc/Makefile`
-  - Raised `test-clint` `--max-cycles` from `80` to `120` for the longer generated test.
-- `notes/plan.md`
-  - Marked P6-S2 done, awaiting user revision before commit, and recorded validation scope.
-- `notes/next.md`
-  - This file, updated for handoff/review.
-
-No RTL or simulator functional code was changed during P6-S2.
-
-## P6-S2 validation completed
+Phase 6 validation completed:
 
 1. Strengthened CLINT directed DiffTest smoke:
 
@@ -74,7 +52,7 @@ No RTL or simulator functional code was changed during P6-S2.
 make -C npc test-clint
 ```
 
-Result: passed. Final key lines:
+Result: passed. Most recent closeout check also passed with:
 
 - `NPC_DIFFTEST status=on`
 - `NEMU_RESULT status=good state=2 halt_pc=0x80000048 halt_ret=0 insts=19 limit=0`
@@ -87,7 +65,7 @@ Result: passed. Final key lines:
 make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest test-clint
 ```
 
-Result: passed. Exact-cycle checks still match the current Makefile expectations, including `test-lw-sw` at 24 cycles, `byte-half-memory` at 78 cycles, and DiffTest baseline cycle checks.
+Result: passed during P6-S2. Exact-cycle checks still matched the Makefile expectations, including `test-lw-sw` at 24 cycles, `byte-half-memory` at 78 cycles, and DiffTest baseline cycle checks.
 
 3. NPC `hello` with NEMU event DiffTest:
 
@@ -98,7 +76,7 @@ make -C am-kernels/kernels/hello ARCH=riscv32e-npc \
   NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
 ```
 
-Result: passed. Output contained `Hello, AbstractMachine!`, `mainargs = ''.`, `NEMU_RESULT status=good`, and `NPC_RESULT status=good reason=good_trap cycles=2038 insts=465 ...`.
+Result: passed during P6-S2. Output contained `Hello, AbstractMachine!`, `mainargs = ''.`, `NEMU_RESULT status=good`, and `NPC_RESULT status=good reason=good_trap cycles=2038 insts=465 ...`.
 
 4. AM devscan/timer bounded smoke:
 
@@ -149,7 +127,7 @@ for t in $(cd "$TESTDIR" && ls *.c | sed 's/\.c$//' | sort); do
 done
 ```
 
-Result: all 35 tests passed:
+Result: all 35 tests passed during P6-S2:
 
 `add`, `add-longlong`, `bit`, `bubble-sort`, `crc32`, `div`, `dummy`, `fact`, `fib`, `goldbach`, `hello-str`, `if-else`, `leap-year`, `load-store`, `matrix-mul`, `max`, `mersenne`, `min3`, `mov-c`, `movsx`, `mul-longlong`, `narcissistic`, `pascal`, `prime`, `quick-sort`, `recursion`, `select-sort`, `shift`, `string`, `sub-longlong`, `sum`, `switch`, `to-lower-case`, `unalign`, `wanshu`.
 
@@ -162,32 +140,39 @@ make -C rt-thread-am/bsp/abstract-machine ARCH=riscv32e-npc \
   NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
 ```
 
-Result: passed through scripted shell `halt`. Output contained the RT-Thread banner, `Hello RISC-V!`, shell commands through `msh />halt`, `NEMU_RESULT status=good state=2 halt_pc=0x8000022c halt_ret=0 insts=511954 limit=0`, and `NPC_RESULT status=good reason=good_trap cycles=2343292 insts=511954 ...`.
+Result: passed through scripted shell `halt` during P6-S2. Output contained the RT-Thread banner, `Hello RISC-V!`, shell commands through `msh />halt`, `NEMU_RESULT status=good state=2 halt_pc=0x8000022c halt_ret=0 insts=511954 limit=0`, and `NPC_RESULT status=good reason=good_trap cycles=2343292 insts=511954 ...`.
 
-## Interpretation / caveats
+Interpretation / caveats:
 
 - Physical CLINT DiffTest replay is working for the strengthened directed test and required workloads.
-- `abstract-machine/am/src/riscv/npc/timer.c` uses the robust `mtimeh/mtime/mtimeh` sequence; the strengthened `test-clint` now directly covers the same ordering pattern in a short deterministic smoke.
+- `abstract-machine/am/src/riscv/npc/timer.c` uses the robust `mtimeh/mtime/mtimeh` sequence; the strengthened `test-clint` directly covers the same ordering pattern in a short deterministic smoke.
 - A true low-word rollover test is not practical with the current CLINT because `mtime` is reset to zero and there is no debug preload path; waiting for `2^32` core cycles is not feasible. P6-S2 therefore uses a short high-stability check plus monotonic low-word advancement.
 - No timer interrupt is generated or expected by spec; observed CTE traps are synchronous `ecall`/yield traps (`mcause=0x0000000b`).
 - UART output remained ordered and non-duplicated in `hello`, bounded CTE smokes, and RT-Thread.
 - `yield-os`, `thread-os`, and AM devscan/timer are expected bounded runs, not pass/fail terminating programs.
 
-## Current git status before user revision
+## Phase 7 plan summary
 
-Observed with `git status --short`:
+Phase 7 has three sessions in `notes/plan.md`:
 
-```text
- M npc/Makefile
- M npc/tests/make-clint-bin.py
-?? .gitignore
-```
+1. `P7-S1: Implement icache, fence.i, counters, and smoke tests`
+   - Implement the full icache feature in one engineering pass: direct-mapped 32-byte flip-flop icache, 16-byte AXI burst refill, `fence.i` invalidation, AMAT counters, structured output, focused tests, and smoke validation.
+2. `P7-S2: Full regression and bug fixing`
+   - Run and fix the full practical regression suite: NPC directed tests, full 35-test `cpu-tests` with DiffTest, `hello`, bounded timer/CTE/thread smokes, and RT-Thread with DiffTest.
+3. `P7-S3: Re-check Phase 7 exit criteria and plan Phase 8`
+   - Confirm final Phase 7 criteria, record commands/results/counters/caveats, update notes, and plan Phase 8 measurement/PPA baselining.
 
-`notes/plan.md` and `notes/next.md` were edited after that status check and should now also appear modified. The untracked top-level `.gitignore` predates this work and should be left alone unless the user explicitly asks.
+Phase 7 exit criteria:
+
+- All previous functional tests pass with icache enabled.
+- `fence.i` invalidates cached instructions.
+- Instruction-cache refill uses 16-byte AXI bursts.
+- AMAT counters are emitted and internally consistent.
+- Phase 8 has reproducible commands and representative counter output to start from.
 
 ## Next steps
 
-1. Let the user review/revise the P6-S2 changes.
-2. After user approval, refresh `git status --short` and relevant diff.
-3. Commit only the intended tracked changes. Do **not** include the pre-existing untracked top-level `.gitignore` unless explicitly requested.
-4. Suggested commit message after approval: `Validate physical CLINT workloads`.
+1. Start `P7-S1`.
+2. Inspect current IFU/AXI implementation before editing: `npc/rtl/core/Ifu.v`, `npc/rtl/core/Core.v`, `npc/rtl/bus/AxiArbiter.v`, `npc/rtl/bus/AxiMaster.v`, local AXI simulation code, and existing NPC tests.
+3. Implement icache, `fence.i`, counters, and focused smoke tests with minimal changes outside the fetch path.
+4. Run the P7-S1 smoke set and update notes before committing.
