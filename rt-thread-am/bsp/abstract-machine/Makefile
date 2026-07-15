@@ -8,6 +8,8 @@ NAME = rtthread
 SRCS = $(shell find src -name "*.c")
 CFLAGS += -DHAVE_CCONFIG_H -D__RTTHREAD__
 CFLAGS += -Wno-nonnull-compare
+CFLAGS += -I$(abspath ../../components/libc/compilers/common/extension)
+CFLAGS += -include sys/types.h
 LDFLAGS += -T extra.ld
 -include $(FILE_MK)
 -include $(AM_APPS_MK)
@@ -16,7 +18,7 @@ include $(AM_HOME)/Makefile
 $(RTCONFIG_H):
 	touch $@
 	scons --useconfig=.config
-	if [ "`sed -n '3p' $@`"x = x ]; then sed -i -e '2a#include "extra.h"' $@; fi
+	grep -q '#include "extra.h"' $@ || { tmp=$@.tmp; awk 'NR == 3 { print "#include \"extra.h\"" } { print }' $@ > $$tmp && mv $$tmp $@; }
 
 init: $(RTCONFIG_H)
 	scons -c

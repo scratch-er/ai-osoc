@@ -11,6 +11,11 @@
 #ifndef __SYS_ERRNO_H__
 #define __SYS_ERRNO_H__
 
+#ifndef errno
+int *_rt_errno(void);
+#define errno (*_rt_errno())
+#endif
+
 #if defined(__ARMCC_VERSION)
 /*
 defined in armcc/errno.h
@@ -38,8 +43,10 @@ defined in armcc/errno.h
 #define ERROR_BASE_NO    0
 #endif
 
+#if defined(__ARMCC_VERSION) || defined(__IAR_SYSTEMS_ICC__) || defined(__GNUC__)
 #if defined(__ARMCC_VERSION) || defined(__IAR_SYSTEMS_ICC__)
 #include <errno.h>
+#endif
 
 #ifndef EPERM
 #define EPERM            (ERROR_BASE_NO + 1)
@@ -580,6 +587,6 @@ defined in armcc/errno.h
 #elif defined(_WIN32)
 #include <errno.h>
 
-#endif /* defined(__ARMCC_VERSION) || defined(__IAR_SYSTEMS_ICC__) */
+#endif /* defined(__ARMCC_VERSION) || defined(__IAR_SYSTEMS_ICC__) || defined(__GNUC__) */
 
 #endif /* __SYS_ERRNO_H__ */

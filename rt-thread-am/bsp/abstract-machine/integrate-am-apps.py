@@ -47,11 +47,20 @@ def read_lib_symbols(lib):
     lib_sym = list(set(lib_sym + res.stdout.strip().split('\n')))
 
 def integrate(app_dir):
+    if not app_dir.exists():
+        print(f"Skip missing AM app: {app_dir}")
+        return
     app_name = app_dir.name.replace("-", "_")
-    os.system(f"make -j ARCH={ARCH} -C {str(app_dir)}")
+    if os.system(f"make -j ARCH={ARCH} -C {str(app_dir)}") != 0:
+        print(f"Skip AM app that failed to build: {app_dir}")
+        return
+    app_build_dir = app_dir / "build" / ARCH
+    if not app_build_dir.exists():
+        print(f"Skip AM app without build output: {app_dir}")
+        return
     dst = Path("build") / ARCH / "am-apps" / app_name
     dst.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(app_dir / "build" / ARCH / "", dst, dirs_exist_ok=True)
+    shutil.copytree(app_build_dir / "", dst, dirs_exist_ok=True)
     objs = dst.rglob("*.o")
     redefine_sym_file = "redefine_sym.txt"
     redefine_sym_fp = open(redefine_sym_file, "w")

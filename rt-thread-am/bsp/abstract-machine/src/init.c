@@ -5,7 +5,11 @@
 
 #define AM_APPS_HEAP_SIZE  0x2000000
 #define RT_HW_HEAP_BEGIN heap.start
+#ifdef __ARCH_RISCV32_NEMU
+#define RT_HW_HEAP_END ((void *)0x82000000)
+#else
 #define RT_HW_HEAP_END heap.end
+#endif
 
 Area am_apps_heap = {}, am_apps_data = {}, am_apps_bss = {};
 uint8_t * am_apps_data_content = NULL;

@@ -7,8 +7,10 @@
  * Date           Author       Notes
  */
 
-#include <rtdevice.h>
 #include <rtthread.h>
+#include <ipc/completion.h>
+#include <ipc/dataqueue.h>
+#include <drivers/serial.h>
 #include <am.h>
 #include <klib.h>
 

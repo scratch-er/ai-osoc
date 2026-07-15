@@ -307,9 +307,9 @@ Exit criteria:
 - Required CSR/trap behavior has directed tests and current pass/fail status.
 - The internal IFU/LSU/control interfaces are ready to evolve toward AXI/icache and an optional pipeline without another decode/datapath rewrite.
 
-## Phase 4: AM Runtime and Essential Workloads
+## Phase 4: AM Runtime, CTE, and RT-Thread AM
 
-Goal: make the essential AM runtime path work on both NPC and NEMU with UART and CLINT/timer support, then use existing AM workloads to validate the foundation before broader CTE/RT-Thread work.
+Goal: make the essential AM runtime path work on both NPC and NEMU with UART, temporary timer, CTE, and `rt-thread-am` support, so the project does not leave Phase 4 until the RT-Thread AM port has at least a reproducible boot/smoke status.
 
 Relevant references:
 
@@ -324,28 +324,35 @@ Relevant references:
 - PA2.3 / PA2.5:
   - AM runtime, klib, IOE abstraction, UART output, timer/RTC tests, and NEMU's device framework.
 - PA3.1 and PA4.1:
-  - exception/trap control flow and CTE validation using existing AM workloads such as `yield-os`.
+  - exception/trap control flow and CTE validation using existing AM workloads such as `yield-os`;
+  - RT-Thread AM is built around AM TRM/CTE: heap from TRM, console output through `putch()`, interrupt enable/disable through `iset()`, and context creation/switching through `kcontext()`/`yield()`.
+- PA4.1 RT-Thread section:
+  - `rt-thread-am/bsp/abstract-machine/src/context.c` must implement `rt_hw_stack_init()`, `rt_hw_context_switch_to()`, and `rt_hw_context_switch()`;
+  - thread entry wrapping must preserve `tentry`, `parameter`, and `texit`, preferably in per-thread stack data rather than a shared global;
+  - context switch can use `yield()` plus an event handler to save `from` and return `to`;
+  - expected success is RT-Thread boot output, built-in shell command output, and finally an idle shell prompt such as `msh />`; lack of UART RX means interactive input is not required.
 - D5:
   - early NPC simulation may model UART/timer through DPI-C/MMIO before real bus devices exist;
   - UART address can be `0x10000000`.
 - C5:
-  - RT-Thread requires CSR access, `ecall`, `mret`, simple exception handling, CTE, and careful debugging, but RT-Thread is not the immediate Phase 4 implementation target until UART/CLINT are stable.
+  - RT-Thread requires CSR access, `ecall`, `mret`, simple exception handling, CTE, and careful debugging;
+  - NPC RT-Thread support should be attempted after NEMU/AM CTE works, not postponed past the phase that claims to cover essential workloads.
 - `specs/core.md`:
   - `ebreak` is a real breakpoint exception architecturally;
   - no interrupts are supported, and built-in CLINT only provides `mtime`/`mtimeh` ticking once per core cycle.
 
 Phase decisions and constraints:
 
-- For this phase, only make **UART output** and a **temporary DiffTest-friendly timer** work first. Do not expand scope into optional devices, new custom workloads, preemptive timer interrupts, physical cycle-accurate CLINT, or full RT-Thread debugging until these basics are stable.
-- UART input is out of scope in Phase 4. No Phase 4 workload is expected to need UART RX.
+- For this phase, make **UART output**, a **temporary DiffTest-friendly timer**, AM CTE, and an initial `rt-thread-am` boot/smoke path work. Do not expand scope into optional devices, physical cycle-accurate CLINT, preemptive timer interrupts, Nanos-lite, Navy, or graphical applications.
+- UART input remains out of scope. RT-Thread's AM UART shim may feed scripted input if already present, but Phase 4 success must not depend on interactive host input.
 - `ebreak` simulation termination is a harness policy: after an `ebreak` instruction has retired, the simulator detects that retired event and stops/reports the result. Termination does not happen inside an AM trap handler.
-- NPC must still keep architectural `ebreak` exception state correct enough for later CTE/RT-Thread work, but Phase 4 should not invent a custom AM termination trap handler.
-- Use existing `am-kernels` workloads for CTE testing, especially `yield-os` and related tests. Do not create a new CTE workload unless existing workloads are unavailable or cannot isolate a confirmed bug.
-- NEMU may be modified to support devices. Prefer its existing device framework rather than ad hoc device paths, so NEMU remains useful as a reference and AM target for UART/timer/CTE tests.
+- NPC must keep architectural `ebreak` exception state correct enough for CTE/RT-Thread work, but Phase 4 should not invent a custom AM termination trap handler.
+- Use existing `am-kernels` workloads for CTE testing, especially `yield-os` and `thread-os`, before debugging RT-Thread. Do not create a new CTE workload unless existing workloads are unavailable or cannot isolate a confirmed bug.
+- NEMU may be modified to support devices. Prefer its existing device framework rather than ad hoc device paths, so NEMU remains useful as a reference and AM target for UART/timer/CTE/RT-Thread tests.
 - Phase 4 timer decision: use a temporary simulation timer/CLINT model whose `mtime`/`mtimeh` advance deterministically by retired-instruction count, so current DiffTest remains usable. This is intentionally not the final physical CLINT behavior.
-- The real physical CLINT from `specs/core.md` increments once per core cycle. Implementing that requires device-aware DiffTest first: REF peripherals off, DUT MMIO input capture, and replay of captured MMIO read values to REF. Schedule that refactor before physical CLINT integration, not in early Phase 4.
+- The real physical CLINT from `specs/core.md` increments once per core cycle. Implementing that requires device-aware DiffTest first: REF peripherals off, DUT MMIO input capture, and replay of captured MMIO read values to REF. Schedule that refactor before physical CLINT integration, not in Phase 4.
 - Keep side effects out of unordered combinational DPI reads/writes. UART output and timer reads in NPC should be ordered through retired memory operations or another explicit harness protocol so Verilator evaluation order cannot duplicate, drop, or reorder device effects.
-- Treat `rt-thread-am` as a later debugging-heavy consumer of the AM/CTE/device foundation. Expect issues in NPC RTL, NEMU device/reference behavior, AM CTE/trap assembly, klib, linker/startup files, and RT-Thread AM build glue, but do not start broad RT-Thread debugging before UART and the temporary timer are working.
+- Treat RT-Thread as the final Phase 4 consumer of the AM/CTE/device foundation. Expect issues in NPC RTL, NEMU device/reference behavior, AM CTE/trap assembly, klib, linker/startup files, RT-Thread AM build glue, and `rt-thread-am/bsp/abstract-machine/src/context.c`; debug the smallest failing slice first.
 - Avoid optional PA devices and applications. No keyboard, VGA, audio, PS/2, Nanos-lite, Navy, VME, user mode, or interrupts unless the user explicitly revises the scope.
 
 Sessions:
@@ -384,10 +391,10 @@ Sessions:
    - Exit status: NEMU `hello` prints through UART and exits good; NEMU devscan/RTC timer smokes show timer progression with bounded/expected terminal statuses; NPC directed regression and all 35 cpu-tests with NEMU event DiffTest still pass.
 
 5. **P4-S5: Klib completion pass for essential workloads**
-   - Audit remaining klib gaps hit by `hello`, timer tests, `yield-os`, and nearby AM workloads.
+   - Audit remaining klib gaps hit by `hello`, timer tests, `yield-os`, `thread-os`, and `rt-thread-am`.
    - Complete missing klib functions by copying/adapting from Sonnet libc where suitable, while keeping code style compatible with `abstract-machine/klib`.
    - Validate with existing AM tests rather than inventing a new klib workload.
-   - Exit when essential AM workloads no longer fail because of missing libc/klib routines.
+   - Exit when essential AM and RT-Thread smoke paths no longer fail because of missing libc/klib routines.
 
 6. **P4-S6: CTE validation with existing `am-kernels` workloads** — completed
    - Fixed the shared RISC-V AM `Context` layout to match the trap frame saved by `trap.S`.
@@ -397,18 +404,35 @@ Sessions:
    - Added the NPC AM MPE glue needed by `thread-os`: `riscv/npc/mpe.c` is now linked for `ARCH=riscv32e-npc`, calls the bootstrap entry on the single simulated CPU, reports `cpu_count() == 1`/`cpu_current() == 0`, and provides a simple single-core `atomic_xchg()`.
    - Exit status: `yield-os` switches between the two contexts and prints `ABAB` under bounded NPC/NEMU runs; `thread-os` enters its thread loop and prints `Thread-B on CPU #0` under a bounded NPC run. These workloads then hit the expected instruction/cycle limits because they are intentionally infinite. NPC runs use NEMU event DiffTest and report no DiffTest failure before the bound.
 
-7. **P4-S7: Workload regression and Phase 4 closeout**
+7. **P4-S7: RT-Thread AM baseline and context implementation** — completed
+   - Fixed the RT-Thread AM generated-config path on macOS: `Makefile` now inserts `#include "extra.h"` without GNU `sed -i` assumptions, adds the RT-Thread freestanding extension include path, and pre-includes `sys/types.h` for common POSIX typedefs.
+   - Made `integrate-am-apps.py` robust when optional AM apps are missing or fail to build; in the current tree, `snake` is skipped because it includes unavailable `<stdlib.h>` in the AM app build, and missing `fceux-am` is skipped.
+   - Added the small freestanding C/POSIX compatibility headers needed by this RT-Thread configuration under `components/libc/compilers/common/extension/`.
+   - Implemented AM-backed RT-Thread context creation and cooperative switching in `src/context.c`: `rt_hw_stack_init()` builds a `kcontext()` with stack-resident thread-start arguments, `rt_hw_context_switch_to()`/`rt_hw_context_switch()` use `yield()` and the CTE handler to switch contexts, and interrupt context switching remains unsupported because Phase 4 has no timer interrupts.
+   - Corrected `src/interrupt.c` prototypes to match RT-Thread UP declarations and return/restore the old interrupt-enable state.
+   - Reduced `src/uart.c` includes to the serial driver dependencies required for console registration, avoiding broad `rtdevice.h` include fallout in the BSP file.
+   - Clamped the `riscv32-nemu` RT-Thread heap end to `0x82000000`, matching the current native NEMU physical memory size, instead of trusting AM's stale 128 MiB `PMEM_END` declaration.
+   - Exit status: `rt-thread-am` builds and runs on NEMU; it prints the RT-Thread banner, `Hello RISC-V!`, scripted shell commands, and reaches the final `msh />`. The bounded run then hits `NEMU_MAX_INSTS`, which is expected because RT-Thread idles forever without interactive UART input.
+
+8. **P4-S8: RT-Thread AM on NPC and DiffTest-safe smoke**
+   - Build/run `rt-thread-am` with `ARCH=riscv32e-npc`, `AM_HOME`, `CROSS_COMPILE=riscv64-elf-`, and a bounded `NPC_MAX_CYCLES`.
+   - Fix only issues required for the same RT-Thread AM smoke target reached on NEMU: RV32E build flags, linker/startup assumptions, AM heap boundaries, UART output, CTE context layout, missing klib symbols, or NPC ISA/CSR/trap bugs.
+   - Use NEMU event DiffTest when practical, but allow targeted suppression or a documented no-DiffTest run if RT-Thread MMIO/timer behavior hits the current pre-Phase-5 DiffTest limits.
+   - Do not add preemptive scheduling, timer interrupts, UART RX, optional shell applications, AM app integration, graphics, storage, or network support in this phase.
+   - Exit when NPC reaches the same visible RT-Thread smoke milestone as NEMU, or when the remaining blocker is narrow enough to schedule before Phase 5.
+
+9. **P4-S9: Workload regression and Phase 4 closeout**
    - Re-run the Phase 4 standard set:
      - NPC directed regression;
      - full or representative cpu-tests with DiffTest;
-     - `hello` with NPC UART output;
-     - AM timer test on NPC CLINT;
-     - matching UART/timer smoke tests on NEMU devices where available;
-     - existing CTE workload such as `yield-os` if CTE work was reached.
-   - Update `npc/README.md` and relevant notes with current run commands only if commands or user-facing flags changed.
-   - Update `notes/next.md` with pass/fail table, exact commands, known caveats, and the next entry point.
+     - NPC/NEMU `hello` UART output;
+     - NPC/NEMU timer smokes;
+     - NPC/NEMU `yield-os` bounded CTE smoke;
+     - NPC `thread-os` bounded CTE/MPE smoke;
+     - RT-Thread AM NEMU and NPC smoke commands from P4-S7/P4-S8.
+   - Update `npc/README.md`, `rt-thread-am/bsp/abstract-machine` notes if any user-facing commands changed, and `notes/next.md` with pass/fail table, exact commands, known caveats, and the Phase 5 entry point.
    - Keep generated logs/images out of commits unless they are intentionally part of the project record.
-   - Exit when a new session can reproduce the Phase 4 UART/CLINT state from notes alone.
+   - Exit when a new session can reproduce the Phase 4 UART/timer/CTE/RT-Thread state from notes alone.
 
 Phase 4 exit criteria:
 
@@ -417,9 +441,10 @@ Phase 4 exit criteria:
 - NEMU has UART/temporary-timer support through its existing device framework or a narrow documented blocker.
 - `ebreak`-based simulation termination is documented as retired-instruction detection in the harness, not AM trap-handler termination.
 - Essential klib gaps found by the selected workloads are completed, using Sonnet libc as an allowed source when useful.
-- Existing AM CTE workload validation, such as `yield-os`, is planned for when UART/temporary timer are stable; if reached in this phase, it has current pass/fail status.
+- Existing AM CTE workloads, at least `yield-os` and a bounded `thread-os` smoke where practical, have current pass/fail status.
+- `rt-thread-am` has current NEMU and NPC smoke commands and status. The minimum successful target is boot/banner/scripted shell output through `msh />`; if not reached, the remaining blocker must be narrow, reproducible, and scheduled before Phase 5.
 - The temporary timer workaround and the need for later MMIO replay DiffTest before physical CLINT are recorded.
-- Phase 3 cpu-tests and directed NPC regressions still pass after AM/runtime/device changes.
+- Phase 3 cpu-tests and directed NPC regressions still pass after AM/runtime/device/RT-Thread changes.
 
 ## Phase 5: System Bus, AXI4 Integration, and Device-Aware DiffTest
 

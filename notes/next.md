@@ -209,33 +209,91 @@ Known caveats:
 - M-extension remains out of scope for the NPC core because the target is RV32E_Zicsr. NEMU implements RV32M only because its `riscv32-nemu` AM target uses `rv32im_zicsr`.
 - UART input is intentionally unsupported in Phase 4.
 
+P4-S7 completed work:
+
+- Fixed RT-Thread AM generated config on macOS by replacing the GNU `sed -i` assumption in `rt-thread-am/bsp/abstract-machine/Makefile` with a portable `awk` insertion for `#include "extra.h"`.
+- Added the RT-Thread freestanding extension include path and pre-included `sys/types.h` from the BSP Makefile so the selected RT-Thread configuration can compile without host libc headers.
+- Made `rt-thread-am/bsp/abstract-machine/integrate-am-apps.py` skip optional AM apps that are missing or fail to build. Current `make init` skips `snake` because its AM-app build includes unavailable `<stdlib.h>`, and skips missing `fceux-am`.
+- Added minimal freestanding compatibility headers under `rt-thread-am/components/libc/compilers/common/extension/`: `ctype.h`, `errno.h`, `fcntl.h`, `limits.h`, `stdio.h`, `stdlib.h`, `string.h`, `time.h`, and `wchar.h`.
+- Updated `rt-thread-am/components/libc/compilers/common/extension/sys/errno.h` so GCC/freestanding builds get POSIX errno constants and `errno` maps to RT-Thread's `_rt_errno()` storage.
+- Implemented `rt-thread-am/bsp/abstract-machine/src/context.c`:
+  - `rt_hw_stack_init()` creates a `kcontext()` and stores `tentry`, `parameter`, and `texit` in the new thread's own stack area;
+  - `rt_hw_context_switch_to()` and `rt_hw_context_switch()` use AM `yield()` and the CTE event handler to return the target `Context *`, saving the outgoing context through `from` when needed;
+  - `rt_hw_context_switch_interrupt()` still asserts because Phase 4 has no timer interrupts.
+- Fixed `rt-thread-am/bsp/abstract-machine/src/interrupt.c` prototypes to match RT-Thread UP declarations: `rt_hw_interrupt_disable()` returns the old enable state and `rt_hw_interrupt_enable(level)` restores based on that state.
+- Reduced `rt-thread-am/bsp/abstract-machine/src/uart.c` from broad `rtdevice.h` to the serial driver headers needed for console registration.
+- Clamped the NEMU RT-Thread heap end in `rt-thread-am/bsp/abstract-machine/src/init.c` to `0x82000000` for `ARCH=riscv32-nemu`, matching the current native NEMU memory `[0x80000000, 0x81ffffff]`. Without this, RT-Thread allocated past NEMU's real memory because AM's NEMU header still declares 128 MiB.
+
+Validated P4-S7 commands and results:
+
+1. Initialize generated RT-Thread AM files:
+
+   ```sh
+   make init ARCH=riscv32-nemu \
+     AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+     CROSS_COMPILE=riscv64-elf-
+   ```
+
+   Result: passed. It generated `rtconfig.h` and `files.mk`. During AM app integration it skipped `snake` and missing `fceux-am`, but kept `hello`, `microbench`, and `typing-game` integrated.
+
+2. NEMU RT-Thread AM smoke:
+
+   ```sh
+   make ARCH=riscv32-nemu \
+     AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+     NEMU_HOME=/Users/venti/Workspace/ai-ysyx/nemu \
+     CROSS_COMPILE=riscv64-elf- NEMU_MAX_INSTS=5000000 run
+   ```
+
+   Result: expected bounded run. It printed:
+
+   ```text
+   am-apps.data.size = 1772, am-apps.bss.size = 44244
+   heap: [0x80043000 - 0x82000000]
+   - RT -     Thread Operating System
+   5.0.1 build Jul 15 2026 11:37:52
+   Hello RISC-V!
+   msh />help
+   RT-Thread shell commands:
+   ...
+   msh />utest_list
+   [I/utest] Commands list :
+   msh />
+   NEMU_RESULT status=limit state=5 halt_pc=0x80013128 halt_ret=1 insts=5000000 limit=5000000
+   ```
+
+   The command exits nonzero only because NEMU reports the configured instruction limit after RT-Thread reaches idle/shell; this is expected for this smoke because RT-Thread does not terminate by design and UART RX is scripted/noninteractive.
+
+Known P4-S7 caveats:
+
+- `rt_hw_context_switch_interrupt()` remains unsupported by design for Phase 4; timer interrupts/preemptive scheduling are still out of scope.
+- `rt-thread-am` now reaches the required NEMU smoke milestone, but NPC RT-Thread has not been run yet.
+- RT-Thread AM app integration is partial: `hello`, `microbench`, and `typing-game` are integrated; `snake` fails its separate AM build due to missing `<stdlib.h>` in that AM app path, and `fceux-am` is absent. This is not a blocker for the RT-Thread boot smoke.
+- AM's NEMU platform still declares a stale 128 MiB `PMEM_END`, while the current NEMU native build exposes 32 MiB. P4-S7 clamps only RT-Thread's NEMU heap; a broader AM/NEMU memory-size cleanup can be considered separately.
+
 Next work:
 
-Start `P4-S7: Workload regression and Phase 4 closeout`.
+Start `P4-S8: RT-Thread AM on NPC and DiffTest-safe smoke`.
 
-Concrete P4-S7 plan:
+Concrete P4-S8 plan:
 
-1. Re-run the Phase 4 standard set and record a concise pass/fail table:
-   - NPC directed regression;
-   - full NPC cpu-tests with NEMU event DiffTest;
-   - NPC/NEMU `hello`;
-   - NPC/NEMU timer smokes;
-   - NPC/NEMU `yield-os` bounded CTE smokes;
-   - NPC `thread-os` bounded CTE/MPE smoke.
-2. Update `npc/README.md` only if user-facing run commands or flags have changed; no README update was needed in P4-S6.
-3. Decide whether Phase 4 is complete enough to move into Phase 5 (`System Bus, AXI4 Integration, and Device-Aware DiffTest`).
-4. Keep optional devices, physical CLINT, interrupts, RT-Thread broad debugging, and AXI work out of Phase 4 unless the user revises the scope.
+1. Run/init RT-Thread AM for `ARCH=riscv32e-npc` with `AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine`, `CROSS_COMPILE=riscv64-elf-`, and a bounded `NPC_MAX_CYCLES`.
+2. Fix only blockers needed to reach the same visible milestone as NEMU: RT-Thread banner, `Hello RISC-V!`, scripted shell output, and final `msh />` or a narrow blocker.
+3. Use NEMU event DiffTest only if practical; if the current Phase 4 MMIO/timer workaround makes RT-Thread DiffTest noisy, record a no-DiffTest smoke first and defer full MMIO replay to Phase 5.
+4. Do not add timer interrupts, preemptive scheduling, UART RX, optional shell apps, storage, graphics, or network support in P4-S8.
+5. Update `notes/next.md` with NPC RT-Thread commands/status before Phase 4 closeout.
 
 Relevant files:
 
 - `notes/plan.md`
 - `notes/next.md`
-- `abstract-machine/am/include/arch/riscv.h`
-- `abstract-machine/am/src/riscv/npc/cte.c`
-- `abstract-machine/am/src/riscv/npc/trap.S`
-- `abstract-machine/am/src/riscv/npc/mpe.c`
-- `abstract-machine/am/src/riscv/nemu/cte.c`
-- `abstract-machine/am/src/riscv/nemu/trap.S`
+- `rt-thread-am/bsp/abstract-machine/Makefile`
+- `rt-thread-am/bsp/abstract-machine/src/context.c`
+- `rt-thread-am/bsp/abstract-machine/src/interrupt.c`
+- `rt-thread-am/bsp/abstract-machine/src/uart.c`
+- `rt-thread-am/bsp/abstract-machine/src/init.c`
+- `rt-thread-am/bsp/abstract-machine/integrate-am-apps.py`
+- `rt-thread-am/components/libc/compilers/common/extension/`
 - `abstract-machine/scripts/platform/npc.mk`
-- `am-kernels/kernels/yield-os/yield-os.c`
-- `am-kernels/kernels/thread-os/thread-os.c`
+- `npc/csrc/`
+- `npc/rtl/`
