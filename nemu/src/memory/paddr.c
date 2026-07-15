@@ -18,13 +18,6 @@
 #include <device/mmio.h>
 #include <isa.h>
 
-#define SERIAL_MMIO 0xa00003f8u
-#define NPC_UART_MMIO 0x10000000u
-#define NPC_CLINT_BASE 0x02000000u
-#define NPC_CLINT_END  0x02010000u
-#define NPC_MTIME      (NPC_CLINT_BASE + 0xbff8u)
-#define NPC_MTIMEH     (NPC_CLINT_BASE + 0xbffcu)
-
 typedef struct {
   const char *name;
   paddr_t base;
@@ -125,9 +118,11 @@ static void pmem_write(paddr_t addr, int len, word_t data) {
   host_write(region_guest_to_host(region, addr), len, data);
 }
 
+#ifndef CONFIG_DEVICE
 static void out_of_bound(paddr_t addr) {
   panic("address = " FMT_PADDR " is out of bound of physical memory at pc = " FMT_WORD, addr, cpu.pc);
 }
+#endif
 
 void init_mem() {
 #if   defined(CONFIG_PMEM_MALLOC)
@@ -147,30 +142,20 @@ word_t paddr_read(paddr_t addr, int len) {
   if (likely(paddr_is_backed(addr, len))) {
     return pmem_read(addr, len);
   }
-  if (addr == NPC_MTIME || addr == NPC_MTIMEH) {
-    extern uint64_t g_nr_guest_inst;
-    uint64_t ticks = g_nr_guest_inst;
-    return addr == NPC_MTIME ? (word_t)ticks : (word_t)(ticks >> 32);
-  }
-  if (addr >= NPC_CLINT_BASE && addr < NPC_CLINT_END) { return 0; }
 #ifdef CONFIG_DEVICE
   return mmio_read(addr, len);
 #else
-  if ((addr == SERIAL_MMIO || addr == NPC_UART_MMIO) && len == 1) { return 0; }
-#endif
   out_of_bound(addr);
   return 0;
+#endif
 }
 
 void paddr_write(paddr_t addr, int len, word_t data) {
   if (likely(paddr_is_backed(addr, len))) { pmem_write(addr, len, data); return; }
-  if (addr >= NPC_CLINT_BASE && addr < NPC_CLINT_END) { return; }
 #ifdef CONFIG_DEVICE
-  if (addr == NPC_UART_MMIO && len == 1) { return; }
   mmio_write(addr, len, data);
   return;
 #else
-  if ((addr == SERIAL_MMIO || addr == NPC_UART_MMIO) && len == 1) { putc(data & 0xff, stderr); return; }
-#endif
   out_of_bound(addr);
+#endif
 }

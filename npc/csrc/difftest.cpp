@@ -38,6 +38,8 @@ bool Difftest::init(const std::string &ref_so, const Memory &memory, uint32_t re
   ref_exec_ = reinterpret_cast<void (*)(uint64_t)>(dlsym(handle_, "difftest_exec"));
   ref_step_event_ = reinterpret_cast<void (*)(CommitEvent *)>(dlsym(handle_, "difftest_step_event"));
   ref_get_last_events_ = reinterpret_cast<size_t (*)(CommitEvent *, size_t)>(dlsym(handle_, "difftest_get_last_events"));
+  ref_set_mmio_replay_ = reinterpret_cast<void (*)(const MMIOReplayRecord *)>(dlsym(handle_, "difftest_set_mmio_replay"));
+  ref_mmio_replay_ok_ = reinterpret_cast<bool (*)()>(dlsym(handle_, "difftest_mmio_replay_ok"));
   ref_init_ = reinterpret_cast<void (*)(int)>(dlsym(handle_, "difftest_init"));
   if (ref_memcpy_ == nullptr || ref_regcpy_ == nullptr || ref_exec_ == nullptr || ref_init_ == nullptr) {
     std::fprintf(stderr, "difftest missing required REF symbol\n");
@@ -59,9 +61,9 @@ bool Difftest::init(const std::string &ref_so, const Memory &memory, uint32_t re
   return true;
 }
 
-bool Difftest::step(const CommitEvent &dut_event, const uint32_t *regs, uint32_t pc,
-                    uint32_t mstatus, uint32_t mtvec, uint32_t mepc, uint32_t mcause,
-                    bool *both_ebreak) {
+bool Difftest::step(const CommitEvent &dut_event, const MMIOReplayRecord &mmio_record,
+                    const uint32_t *regs, uint32_t pc, uint32_t mstatus, uint32_t mtvec,
+                    uint32_t mepc, uint32_t mcause, bool *both_ebreak) {
   if (both_ebreak != nullptr) {
     *both_ebreak = false;
   }
@@ -69,9 +71,17 @@ bool Difftest::step(const CommitEvent &dut_event, const uint32_t *regs, uint32_t
     return true;
   }
 
+  if (mmio_record.valid && ref_set_mmio_replay_ != nullptr) {
+    ref_set_mmio_replay_(&mmio_record);
+  }
+
   if (ref_step_event_ != nullptr) {
     CommitEvent ref_event{};
     ref_step_event_(&ref_event);
+    bool replay_ok = ref_mmio_replay_ok_ == nullptr || ref_mmio_replay_ok_();
+    if (!replay_ok) {
+      return false;
+    }
     if (ref_event.pc == dut_event.pc && ref_event.inst == dut_event.inst && dut_event.inst == 0x00100073u) {
       if (both_ebreak != nullptr) {
         *both_ebreak = true;
@@ -99,6 +109,9 @@ bool Difftest::step(const CommitEvent &dut_event, const uint32_t *regs, uint32_t
   }
 
   ref_exec_(1);
+  if (ref_mmio_replay_ok_ != nullptr && !ref_mmio_replay_ok_()) {
+    return false;
+  }
   CPUState ref;
   ref_regcpy_(&ref, DIFFTEST_TO_DUT);
   return check_regs(ref, regs, pc, mstatus, mtvec, mepc, mcause);

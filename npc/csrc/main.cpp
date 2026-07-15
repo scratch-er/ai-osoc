@@ -65,6 +65,18 @@ uint32_t debug_reg(const VNPC &top, int idx) {
   return top.debug_regs_flat[idx];
 }
 
+bool is_mmio_addr(uint32_t addr) {
+  return addr == 0x10000000u || (addr >= 0x02000000u && addr < 0x0200c000u);
+}
+
+uint8_t low_contiguous_len(uint8_t wmask) {
+  uint8_t len = 0;
+  for (int i = 0; i < 4 && ((wmask >> i) & 1u); i++) {
+    len++;
+  }
+  return len == 0 ? 4 : len;
+}
+
 std::array<uint32_t, 16> debug_regs(const VNPC &top) {
   std::array<uint32_t, 16> regs{};
   for (int i = 0; i < 16; i++) {
@@ -130,6 +142,7 @@ public:
   void reset() {
     cycles_ = 0;
     retire_ = 0;
+    pending_mmio_read_ = {};
     memory_.set_time(0);
     top_.reset = 1;
     top_.io_interrupt = 0;
@@ -152,14 +165,29 @@ public:
       if (cycles_ >= args_.max_cycles) return {"limit", "cycle_limit"};
       if (!top_.commit_valid) return {"bad", "no_commit"};
 
+      memory_.clear_mmio_record();
       memory_.set_time(retire_ + 1);
       top_.eval();
       CommitEvent ev = make_event();
+      MMIOReplayRecord read_mmio_record = pending_mmio_read_;
+      pending_mmio_read_ = {};
+      if (!read_mmio_record.valid) {
+        read_mmio_record = memory_.mmio_record();
+      }
       bool commit_mem_wen = top_.commit_mem_wen;
       uint32_t commit_mem_addr = top_.commit_mem_addr;
       uint32_t commit_mem_wdata = top_.commit_mem_wdata;
       uint8_t commit_mem_wmask = static_cast<uint8_t>(top_.commit_mem_wmask & 0xf);
+      MMIOReplayRecord mmio_record{};
+      if (commit_mem_wen && is_mmio_addr(commit_mem_addr)) {
+        mmio_record = {true, true, commit_mem_addr, low_contiguous_len(commit_mem_wmask),
+                       commit_mem_wmask, commit_mem_wdata, 0};
+      }
       eval_cycle();
+      pending_mmio_read_ = memory_.mmio_record();
+      if (!mmio_record.valid) {
+        mmio_record = read_mmio_record;
+      }
       cycles_++;
       ring_.push(ev);
       retire_++;
@@ -176,7 +204,7 @@ public:
       if (difftest_.enabled()) {
         auto regs = debug_regs(top_);
         bool both_ebreak = false;
-        if (!difftest_.step(ev, regs.data(), top_.debug_pc, top_.debug_mstatus,
+        if (!difftest_.step(ev, mmio_record, regs.data(), top_.debug_pc, top_.debug_mstatus,
                             top_.debug_mtvec, top_.debug_mepc, top_.debug_mcause,
                             &both_ebreak)) {
           difftest_.dump_last_ref(8);
@@ -304,6 +332,7 @@ private:
   uint64_t sim_time_ = 0;
   uint64_t cycles_ = 0;
   uint64_t retire_ = 0;
+  MMIOReplayRecord pending_mmio_read_{};
   int log_level_ = 0;
   bool trace_on_ = false;
   std::vector<uint32_t> breakpoints_;

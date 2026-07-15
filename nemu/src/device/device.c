@@ -23,6 +23,7 @@
 void init_map();
 void init_serial();
 void init_timer();
+void init_npc_devices();
 void init_vga();
 void init_i8042();
 void init_audio();
@@ -79,6 +80,7 @@ void init_device() {
 
   IFDEF(CONFIG_HAS_SERIAL, init_serial());
   IFDEF(CONFIG_HAS_TIMER, init_timer());
+  init_npc_devices();
   IFDEF(CONFIG_HAS_VGA, init_vga());
   IFDEF(CONFIG_HAS_KEYBOARD, init_i8042());
   IFDEF(CONFIG_HAS_AUDIO, init_audio());

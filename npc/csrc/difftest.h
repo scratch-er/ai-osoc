@@ -17,9 +17,9 @@ public:
             const uint32_t *regs, uint32_t pc, uint32_t mstatus, uint32_t mtvec,
             uint32_t mepc, uint32_t mcause);
   bool enabled() const { return enabled_; }
-  bool step(const CommitEvent &dut_event, const uint32_t *regs, uint32_t pc,
-            uint32_t mstatus, uint32_t mtvec, uint32_t mepc, uint32_t mcause,
-            bool *both_ebreak);
+  bool step(const CommitEvent &dut_event, const MMIOReplayRecord &mmio_record,
+            const uint32_t *regs, uint32_t pc, uint32_t mstatus, uint32_t mtvec,
+            uint32_t mepc, uint32_t mcause, bool *both_ebreak);
   void dump_last_ref(size_t n) const;
 
 private:
@@ -39,6 +39,8 @@ private:
   void (*ref_exec_)(uint64_t n) = nullptr;
   void (*ref_step_event_)(CommitEvent *ev) = nullptr;
   size_t (*ref_get_last_events_)(CommitEvent *buf, size_t max_n) = nullptr;
+  void (*ref_set_mmio_replay_)(const MMIOReplayRecord *record) = nullptr;
+  bool (*ref_mmio_replay_ok_)() = nullptr;
   void (*ref_init_)(int port) = nullptr;
 
   static void fill_state(CPUState *state, const uint32_t *regs, uint32_t pc,

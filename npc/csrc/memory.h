@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <string>
 
+#include <debug/mmio_replay.h>
+
 class Memory {
 public:
   explicit Memory(uint32_t base_addr = 0x20000000u, uint32_t size = 128u * 1024u * 1024u);
@@ -16,9 +18,11 @@ public:
   void set_trace(bool enable) { trace_ = enable; }
   void set_time(uint64_t time) { time_ = time; }
   void copy_to(void *dst, uint32_t addr, uint32_t len) const;
-  uint32_t read32(uint32_t addr) const;
+  uint32_t read32(uint32_t addr);
   void write32(uint32_t addr, uint32_t data, uint8_t wmask = 0xf);
   void commit_mmio_write(uint32_t addr, uint32_t data, uint8_t wmask);
+  void clear_mmio_record();
+  const MMIOReplayRecord &mmio_record() const { return mmio_record_; }
 
 private:
   uint32_t base_addr_;
@@ -26,6 +30,7 @@ private:
   uint8_t *data_;
   uint64_t time_ = 0;
   bool trace_ = false;
+  MMIOReplayRecord mmio_record_{};
 };
 
 void set_pmem(Memory *memory);

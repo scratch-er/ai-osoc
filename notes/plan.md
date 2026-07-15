@@ -473,16 +473,16 @@ Sessions:
    - Revalidated NEMU `hello`, NPC `hello` with DiffTest, NPC directed regression, and 35 cpu-tests.
    - Remaining caveat: temporary NPC UART/CLINT aliases still live in generic `paddr.c`.
 
-2. **P5-S2: Device/MMIO cleanup and replay contract**
-   - Move temporary NPC UART/CLINT address handling out of generic NEMU `paddr.c` into device/MMIO or platform-specific code.
-   - Define the ordered MMIO replay contract:
-     - DUT records retired MMIO accesses in CommitEvent metadata.
-     - For MMIO reads, DUT read value is replayed into REF at the matching retired instruction.
-     - For MMIO writes, REF side effects are suppressed or validated so UART output is not duplicated.
-     - Normal RAM traffic is not replayed transaction-by-transaction.
-   - Extend CommitEvent/DiffTest interfaces enough to carry MMIO address, size, write mask/data, read value, and access kind.
-   - Add a narrow directed test for non-loadable/non-writable memory region behavior if practical.
-   - Re-run: NEMU `hello`, NPC `hello` with DiffTest, RT-Thread NPC DiffTest smoke, NPC directed regression, and 35 cpu-tests.
+2. **P5-S2: Device/MMIO cleanup and replay contract** — completed, pending user note review/commit
+   - Moved temporary NPC UART/CLINT address handling out of generic NEMU `paddr.c` into device/MMIO code.
+   - Implemented a lightweight ordered MMIO replay contract outside `CommitEvent`:
+     - DUT records the just-retired MMIO access in the NPC harness;
+     - DUT passes one optional MMIO replay record to the NEMU REF before stepping the matching REF instruction;
+     - REF MMIO callbacks validate matching address/size/direction/data and replay DUT read data;
+     - REF shared-object UART output is suppressed so DiffTest does not duplicate DUT host output;
+     - normal RAM traffic is not replayed transaction-by-transaction.
+   - Added temporary NEMU NPC-compatible devices for UART `0x10000000` and CLINT `0x02000000..0x0200bfff` following `specs/clint.rst` bounds. The timer value remains the Phase 4 retired-instruction model.
+   - Revalidated NEMU `hello`, NPC `hello` with DiffTest, RT-Thread NPC DiffTest smoke, NPC directed regression, all 35 cpu-tests, and timer/devscan smokes.
 
 3. **P5-S3: NPC internal bus request/response boundary**
    - Refactor IFU and LSU memory access around explicit request/response style interfaces.

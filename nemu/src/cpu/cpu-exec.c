@@ -18,7 +18,11 @@
 #include <cpu/difftest.h>
 #include <locale.h>
 
+#ifdef CONFIG_TARGET_SHARE
+static inline bool sdb_breakpoint_hit(vaddr_t pc) { return false; }
+#else
 bool sdb_breakpoint_hit(vaddr_t pc);
+#endif
 
 CPU_state cpu = {};
 uint64_t g_nr_guest_inst = 0;

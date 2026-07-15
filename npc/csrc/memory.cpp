@@ -10,6 +10,25 @@ constexpr uint32_t CLINT_END = 0x02010000u;
 constexpr uint32_t CLINT_MTIME = CLINT_BASE + 0xbff8u;
 constexpr uint32_t CLINT_MTIMEH = CLINT_BASE + 0xbffcu;
 Memory *pmem = nullptr;
+
+uint8_t low_contiguous_mask(uint8_t wmask) {
+  for (int i = 0; i < 4; i++) {
+    if ((wmask & (1u << i)) == 0) {
+      return wmask & ((1u << i) - 1u);
+    }
+  }
+  return wmask & 0xf;
+}
+
+uint8_t mask_len(uint8_t wmask) {
+  uint8_t mask = low_contiguous_mask(wmask);
+  uint8_t len = 0;
+  while (mask != 0) {
+    len++;
+    mask >>= 1;
+  }
+  return len == 0 ? 4 : len;
+}
 }
 
 Memory::Memory(uint32_t base_addr, uint32_t size)
@@ -75,16 +94,18 @@ void Memory::copy_to(void *dst, uint32_t addr, uint32_t len) const {
   std::memcpy(dst, data_ + off, len);
 }
 
-uint32_t Memory::read32(uint32_t addr) const {
+uint32_t Memory::read32(uint32_t addr) {
   if (addr == CLINT_MTIME || addr == CLINT_MTIMEH) {
     uint32_t data = (addr == CLINT_MTIME) ? static_cast<uint32_t>(time_)
                                           : static_cast<uint32_t>(time_ >> 32);
+    mmio_record_ = {true, false, addr, 4, 0, 0, data};
     if (trace_) {
       std::printf("NPC_MMIO r addr=0x%08x data=0x%08x\n", addr, data);
     }
     return data;
   }
   if (addr >= CLINT_BASE && addr < CLINT_END) {
+    mmio_record_ = {true, false, addr, 4, 0, 0, 0};
     if (trace_) {
       std::printf("NPC_MMIO r addr=0x%08x data=0x00000000\n", addr);
     }
@@ -108,6 +129,7 @@ uint32_t Memory::read32(uint32_t addr) const {
 
 void Memory::write32(uint32_t addr, uint32_t data, uint8_t wmask) {
   if (addr == UART_BASE || (addr >= CLINT_BASE && addr < CLINT_END)) {
+    mmio_record_ = {true, true, addr, mask_len(wmask), static_cast<uint8_t>(wmask & 0xf), data, 0};
     if (trace_) {
       std::printf("NPC_MMIO w addr=0x%08x data=0x%08x mask=0x%x\n", addr, data, wmask & 0xf);
     }
@@ -134,6 +156,10 @@ void Memory::commit_mmio_write(uint32_t addr, uint32_t data, uint8_t wmask) {
     std::putchar(static_cast<unsigned char>(data & 0xff));
     std::fflush(stdout);
   }
+}
+
+void Memory::clear_mmio_record() {
+  mmio_record_ = {};
 }
 
 void set_pmem(Memory *memory) {

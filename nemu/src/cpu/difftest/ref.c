@@ -16,10 +16,21 @@
 #include <isa.h>
 #include <cpu/cpu.h>
 #include <difftest-def.h>
+#include <debug/mmio_replay.h>
 #include <memory/paddr.h>
 #include <utils.h>
 
 void cpu_exec(uint64_t n);
+void npc_mmio_replay_set(const MMIOReplayRecord *record);
+bool npc_mmio_replay_ok(void);
+
+__EXPORT void difftest_set_mmio_replay(const MMIOReplayRecord *record) {
+  npc_mmio_replay_set(record);
+}
+
+__EXPORT bool difftest_mmio_replay_ok(void) {
+  return npc_mmio_replay_ok();
+}
 
 __EXPORT void difftest_memcpy(paddr_t addr, void *buf, size_t n, bool direction) {
   if (direction == DIFFTEST_TO_REF) {
@@ -57,7 +68,9 @@ __EXPORT void difftest_raise_intr(word_t NO) {
 
 __EXPORT void difftest_init(int port) {
   void init_mem();
+  void init_device();
   init_mem();
+  IFDEF(CONFIG_DEVICE, init_device());
   /* Perform ISA dependent initialization. */
   init_isa();
 }
