@@ -1,9 +1,12 @@
 #include "VNPC.h"
 
 #include "memory.h"
+
+#if NPC_DEBUG
 #include "difftest.h"
 
 #include <debug/commit_event.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -25,16 +28,19 @@
 
 namespace {
 
+#if NPC_DEBUG
 constexpr uint32_t NPC_STATUS_RUNNING = 0;
 constexpr uint32_t NPC_STATUS_GOOD = 1;
 constexpr uint32_t NPC_STATUS_BAD = 2;
 constexpr uint32_t NPC_STATUS_LIMIT = 3;
+#endif
 
 struct Args {
   std::string image;
   std::string difftest_ref;
   std::string exec_script;
   std::string script_file;
+  std::string uart_expect;
   uint64_t max_cycles = 100;
   uint32_t reset_pc = 0x20000000u;
   bool wave = false;
@@ -61,6 +67,7 @@ bool parse_u64(const char *s, uint64_t *value) {
   return true;
 }
 
+#if NPC_DEBUG
 uint32_t debug_reg(const VNPC &top, int idx) {
   return top.debug_regs_flat[idx];
 }
@@ -365,9 +372,61 @@ private:
   bool trace_on_ = false;
   std::vector<uint32_t> breakpoints_;
 };
+#endif
+
+#if !NPC_DEBUG
+class Simulator {
+public:
+  Simulator(VNPC &top, Memory &memory, const Args &args) : top_(top), memory_(memory), args_(args) {}
+
+  void reset() {
+    cycles_ = 0;
+    memory_.set_time(0);
+    top_.reset = 1;
+    top_.io_interrupt = 0;
+    eval_cycle();
+    eval_cycle();
+    top_.reset = 0;
+    top_.eval();
+  }
+
+  RunResult run(uint64_t n) {
+    for (uint64_t i = 0; i < n; i++) {
+      if (Verilated::gotFinish()) return {"bad", "host_finish"};
+      if (memory_.uart_eot()) return {"good", "uart_eot"};
+      if (memory_.uart_expect_seen()) return {"good", "uart_expect"};
+      if (cycles_ >= args_.max_cycles) return {"limit", "cycle_limit"};
+      memory_.set_time(cycles_ + 1);
+      eval_cycle();
+      cycles_++;
+    }
+    if (memory_.uart_eot()) return {"good", "uart_eot"};
+    if (memory_.uart_expect_seen()) return {"good", "uart_expect"};
+    return {"limit", "cycle_limit"};
+  }
+
+  uint64_t cycles() const { return cycles_; }
+
+private:
+  void eval_cycle() {
+    top_.clock = 0;
+    top_.eval();
+    sim_time_++;
+    top_.clock = 1;
+    top_.eval();
+    sim_time_++;
+  }
+
+  VNPC &top_;
+  Memory &memory_;
+  const Args &args_;
+  uint64_t sim_time_ = 0;
+  uint64_t cycles_ = 0;
+};
+#endif
 
 void usage(const char *prog) {
-  std::printf("Usage: %s [--image FILE] [--max-cycles N] [--reset-pc HEX] [--expect-x1 HEX] [--difftest-ref SO] [--wave] [--dump-trace] [--dump-regs] [--mem-trace] [-e COMMANDS] [-f FILE]\n", prog);
+  std::printf("Usage: %s [--image FILE] [--max-cycles N] [--reset-pc HEX] [--expect-x1 HEX] [--uart-expect TEXT] [--difftest-ref SO] [--wave] [--dump-trace] [--dump-regs] [--mem-trace] [-e COMMANDS] [-f FILE]\n", prog);
 }
 
 bool parse_args(int argc, char **argv, Args *args) {
@@ -380,6 +439,8 @@ bool parse_args(int argc, char **argv, Args *args) {
       args->exec_script = argv[++i];
     } else if ((std::strcmp(argv[i], "-f") == 0 || std::strcmp(argv[i], "--script") == 0) && i + 1 < argc) {
       args->script_file = argv[++i];
+    } else if (std::strcmp(argv[i], "--uart-expect") == 0 && i + 1 < argc) {
+      args->uart_expect = argv[++i];
     } else if (std::strcmp(argv[i], "--max-cycles") == 0 && i + 1 < argc) {
       if (!parse_u64(argv[++i], &args->max_cycles)) {
         std::fprintf(stderr, "invalid --max-cycles\n");
@@ -426,6 +487,7 @@ bool parse_args(int argc, char **argv, Args *args) {
   return true;
 }
 
+#if NPC_DEBUG
 std::vector<std::string> split_commands(const std::string &script) {
   std::vector<std::string> commands;
   std::string current;
@@ -561,6 +623,7 @@ std::string read_script_file(const std::string &path) {
   ss << in.rdbuf();
   return ss.str();
 }
+#endif
 
 } // namespace
 
@@ -574,6 +637,7 @@ int main(int argc, char **argv) {
 
   Memory memory(args.reset_pc);
   memory.set_trace(args.mem_trace);
+  memory.set_uart_expect(args.uart_expect);
   set_pmem(&memory);
   if (!memory.load_image(args.image)) {
     std::printf("NPC_RESULT status=bad reason=image_load_failed cycles=0 pc=0x%08x\n", args.reset_pc);
@@ -592,6 +656,7 @@ int main(int argc, char **argv) {
   }
 #endif
 
+#if NPC_DEBUG
   Difftest difftest;
   Simulator sim(*top, memory, args, difftest);
   sim.reset();
@@ -666,6 +731,17 @@ int main(int argc, char **argv) {
   if (args.dump_regs || !run_pass) {
     dump_regs(*top);
   }
+#else
+  Simulator sim(*top, memory, args);
+  sim.reset();
+  RunResult result = sim.run(args.max_cycles);
+  bool run_pass = result.status == "good";
+  std::printf("\nNPC_SPEC_RESULT status=%s reason=%s cycles=%llu limit=%llu\n",
+              result.status.c_str(),
+              result.reason.c_str(),
+              static_cast<unsigned long long>(sim.cycles()),
+              static_cast<unsigned long long>(args.max_cycles));
+#endif
 
 #if VM_TRACE
   if (tfp) {

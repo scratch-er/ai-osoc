@@ -18,11 +18,14 @@ public:
   bool access_ok(uint32_t addr) const;
   void set_trace(bool enable) { trace_ = enable; }
   void set_time(uint64_t time) { time_ = time; }
+  void set_uart_expect(const std::string &text);
   void copy_to(void *dst, uint32_t addr, uint32_t len) const;
   uint32_t read32(uint32_t addr);
   void write32(uint32_t addr, uint32_t data, uint8_t wmask = 0xf);
   void commit_mmio_write(uint32_t addr, uint32_t data, uint8_t wmask);
   void clear_mmio_record();
+  bool uart_eot() const { return uart_eot_; }
+  bool uart_expect_seen() const { return uart_expect_seen_; }
   const MMIOReplayRecord &mmio_record() const { return mmio_record_; }
 
 private:
@@ -31,6 +34,10 @@ private:
   uint8_t *data_;
   uint64_t time_ = 0;
   bool trace_ = false;
+  bool uart_eot_ = false;
+  bool uart_expect_seen_ = false;
+  std::string uart_expect_;
+  uint32_t uart_expect_pos_ = 0;
   MMIOReplayRecord mmio_record_{};
 };
 

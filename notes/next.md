@@ -443,14 +443,93 @@ Phase 7 exit criteria are met on Linux:
 - AMAT counters are emitted and internally consistent.
 - Phase 8 has reproducible per-platform commands and representative Linux counter output to start from; macOS commands are kept in `notes/platform-macos.md` and should be revalidated when running on macOS again.
 
+## Phase 8 Session 1 status
+
+`P8-S1: Guard debug ports and add a spec-interface simulation harness` is implemented and validated on Linux. The user asked to review/revise before committing, so do not commit until after their revision.
+
+Implemented behavior:
+
+- `npc/rtl/NPC.v` now uses `NPC_DEBUG`:
+  - `NPC_DEBUG=1` exposes the existing Verilator/DiffTest debug interface: `io_reset_pc`, `debug_*`, and `commit_*`.
+  - `NPC_DEBUG=0` hides those ports from the top-level interface, leaving the spec ports from `specs/core.md` plus the hardwired-inactive reserved AXI slave outputs.
+- The spec-mode simulator reuses the existing simulation code instead of a separate harness stack:
+  - `npc/csrc/main.cpp` has compile-time debug/spec paths.
+  - `npc/csrc/memory.cpp` still provides image loading and the DPI-backed local AXI memory path; in spec mode, UART writes at `0x10000000` print immediately, UART EOT byte `0x04` terminates the small smoke, and `--uart-expect TEXT` can stop larger workloads after expected UART output.
+  - `npc/rtl/bus/LocalAxiSlave.v` remains the local AXI service path for Verilator smoke runs.
+- `npc/Makefile` now has `NPC_DEBUG ?= 1` and `RESET_PC ?= 0x20000000`, passes `-DNPC_DEBUG=...` to C++, passes `+define+NPC_DEBUG` to Verilator only in debug mode, passes `-GRESET_PC=$(RESET_PC)`, and adds `spec-smoke`.
+- Added `npc/tests/make-spec-uart-bin.py`, generating a reset-PC `0x20000000` program that prints `SPEC\n` to UART and then writes EOT (`0x04`).
+- Updated `npc/README.md` with debug/spec build commands.
+
+P8-S1 validation completed:
+
+1. Spec-mode smoke:
+
+```sh
+make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke
+```
+
+Result: passed. Output included:
+
+- `NPC_IMAGE path=build/tests/spec-uart.bin base=0x20000000 size=52`
+- `SPEC`
+- `NPC_SPEC_RESULT status=good reason=uart_eot cycles=61 limit=400`
+
+2. Spec-mode AM `hello` UART smoke:
+
+```sh
+make -C npc clean && make -C npc NPC_DEBUG=0 RESET_PC=0x80000000
+make -C am-kernels/kernels/hello ARCH=riscv32e-npc \
+  AM_HOME=/host/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-linux-gnu- image
+npc/build/npc --image am-kernels/kernels/hello/build/hello-riscv32e-npc.bin \
+  --reset-pc 0x80000000 --max-cycles 2000000 \
+  --uart-expect "Hello, AbstractMachine!"
+```
+
+Result: passed. Output included `Hello, AbstractMachine!` and `NPC_SPEC_RESULT status=good reason=uart_expect cycles=1217 limit=2000000`.
+
+3. Spec-mode RT-Thread UART smoke:
+
+```sh
+make -C rt-thread-am/bsp/abstract-machine ARCH=riscv32e-npc \
+  AM_HOME=/host/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-linux-gnu- image
+npc/build/npc --image rt-thread-am/bsp/abstract-machine/build/rtthread-riscv32e-npc.bin \
+  --reset-pc 0x80000000 --max-cycles 12000000 --uart-expect "msh />"
+```
+
+Result: passed. Output included the RT-Thread banner, `Hello RISC-V!`, `msh />`, and `NPC_SPEC_RESULT status=good reason=uart_expect cycles=302371 limit=12000000`.
+
+4. Default debug-mode directed regression with DiffTest:
+
+```sh
+make -C npc clean && make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
+  test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest \
+  test-clint test-icache test-fencei test-access-fault \
+  REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+```
+
+Result: passed. Representative lines remained consistent:
+
+- `test-clint`: `NPC_RESULT status=good reason=good_trap cycles=68 insts=19 ...`; `NPC_ICACHE accesses=19 hits=14 misses=5 ...`.
+- `test-icache`: `NPC_RESULT status=good reason=good_trap cycles=50 insts=19 ...`; `NPC_ICACHE accesses=19 hits=17 misses=2 ...`.
+- `test-fencei`: `NPC_RESULT status=good reason=good_trap cycles=50 insts=9 ...`; `NPC_ICACHE accesses=9 hits=4 misses=5 ...`.
+- Access-fault subtests passed with NEMU event DiffTest.
+
+5. AM `hello` with NEMU event DiffTest:
+
+```sh
+make -C am-kernels/kernels/hello ARCH=riscv32e-npc \
+  AM_HOME=/host/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-linux-gnu- NPC_MAX_CYCLES=2000000 \
+  NPC_DIFFTEST_REF=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+Result: passed. Output contained `Hello, AbstractMachine!`, `mainargs = ''.`, `NEMU_RESULT status=good state=2 halt_pc=0x800000c4 halt_ret=0 insts=465 limit=0`, `NPC_RESULT status=good reason=good_trap cycles=2116 insts=465 ...`, and `NPC_ICACHE accesses=465 hits=297 misses=168 ...`.
+
 ## Next steps
 
-1. Start `P8-S1: Guard debug ports and add a spec-interface simulation harness` on Linux.
-2. Introduce an RTL macro such as `NPC_DEBUG`:
-   - `NPC_DEBUG=1`: preserve current Verilator/DiffTest/debug flow.
-   - `NPC_DEBUG=0`: expose only the top-level interface specified in `specs/core.md`.
-3. Add a minimal spec-interface harness that does not use debug/commit ports, can load/run a small binary, services AXI memory/device accesses, and prints UART writes to `0x10000000`.
-4. Validate both modes before moving to P8-S2:
-   - debug mode: P7 directed regression with DiffTest passes.
-   - spec mode: build/elaboration succeeds and the spec harness prints UART output.
-5. After P8-S1, proceed to Linux timing/PPA baseline and targeted optimization in P8-S2. Record the flow and lessons in `notes/p8-timing-and-ppa.md`.
+1. Let the user revise the P8-S1 changes.
+2. After the user says revisions are done, make the requested commit with user `bot` and email `iamabot@example.com`.
+3. Then proceed to `P8-S2: Analyze baseline PPA/performance and perform targeted optimization` on Linux.
+4. In P8-S2, record the timing/PPA flow and lessons in `notes/p8-timing-and-ppa.md`.

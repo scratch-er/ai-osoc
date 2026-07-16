@@ -667,14 +667,12 @@ Scope decisions:
 
 Sessions:
 
-1. **P8-S1: Guard debug ports and add a spec-interface simulation harness**
-   - Introduce an RTL macro such as `NPC_DEBUG`.
-   - With `NPC_DEBUG` undefined, make `npc/rtl/NPC.v` expose exactly the top-level interface in `specs/core.md`.
-   - With `NPC_DEBUG=1`, preserve the current Verilator/DiffTest/debug flow.
-   - Guard debug/test-only ports and top-level exposure: `io_reset_pc`, `debug_*`, and `commit_*`.
-   - Keep functional datapath/control logic unchanged.
-   - Add a minimal spec-interface C++/Verilator harness that does not use debug/commit ports and can load/run a binary, service AXI memory/device accesses, and print UART writes to `0x10000000`.
-   - Validate both modes: debug-mode P7 directed regression passes; spec-mode build/elaboration works; spec harness runs at least one meaningful UART/hello-style program.
+1. **P8-S1: Guard debug ports and add a spec-interface simulation harness** — done.
+   - Added `NPC_DEBUG` build mode. The default `NPC_DEBUG=1` preserves the Verilator/DiffTest/debug flow; `NPC_DEBUG=0` hides `io_reset_pc`, `debug_*`, and `commit_*` from `npc/rtl/NPC.v` top-level ports.
+   - Kept functional datapath/control logic unchanged and reused the existing C++ simulation code plus `LocalAxiSlave`/DPI memory path for the spec smoke.
+   - Added `npc/tests/make-spec-uart-bin.py` and `make -C npc NPC_DEBUG=0 spec-smoke`, which runs a tiny UART program from reset PC `0x20000000` and stops on UART EOT (`0x04`) without using debug/commit ports.
+   - Added `RESET_PC` Verilator parameter support in the NPC Makefile and `--uart-expect TEXT` in the simulator so spec mode can run larger AM images at `0x80000000` and stop after expected UART output.
+   - Validation completed on Linux: `NPC_DEBUG=0 spec-smoke` printed `SPEC` and `NPC_SPEC_RESULT status=good reason=uart_eot cycles=61`; `hello` in spec mode printed `Hello, AbstractMachine!` and stopped at `NPC_SPEC_RESULT status=good reason=uart_expect cycles=1217`; RT-Thread in spec mode reached `msh />` and stopped at `NPC_SPEC_RESULT status=good reason=uart_expect cycles=302371`; default debug-mode smoke/selected DiffTest checks still passed.
 
 2. **P8-S2: Analyze baseline PPA/performance and perform targeted optimization**
    - Run Linux tool smoke for `yosys` and `iEDA`.

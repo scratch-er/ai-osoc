@@ -7,7 +7,9 @@ module NPC #(
   input         clock,
   input         reset,
   input         io_interrupt,
+`ifdef NPC_DEBUG
   input  [31:0] io_reset_pc,
+`endif
   input         io_master_awready,
   output        io_master_awvalid,
   output [31:0] io_master_awaddr,
@@ -65,7 +67,9 @@ module NPC #(
   output [1:0]  io_slave_rresp,
   output [31:0] io_slave_rdata,
   output        io_slave_rlast,
-  output [3:0]  io_slave_rid,
+  output [3:0]  io_slave_rid
+`ifdef NPC_DEBUG
+  ,
   output [31:0] debug_pc,
   output        debug_halted,
   output [31:0] debug_x1,
@@ -97,6 +101,7 @@ module NPC #(
   output [31:0] commit_mem_wdata,
   output [3:0]  commit_mem_wmask,
   output [31:0] commit_mem_rdata
+`endif
 );
 
   wire core_awready;
@@ -122,6 +127,55 @@ module NPC #(
   wire [31:0] local_rdata;
   wire local_rlast;
   wire [3:0] local_rid;
+
+`ifndef NPC_DEBUG
+  wire [31:0] debug_pc;
+  wire        debug_halted;
+  wire [31:0] debug_x1;
+  wire [31:0] debug_a0;
+  wire [1:0]  debug_trap_status;
+  wire [31:0] debug_inst;
+  wire [31:0] debug_mstatus;
+  wire [31:0] debug_mtvec;
+  wire [31:0] debug_mepc;
+  wire [31:0] debug_mcause;
+  wire [511:0] debug_regs_flat;
+  wire [63:0] debug_icache_accesses;
+  wire [63:0] debug_icache_hits;
+  wire [63:0] debug_icache_misses;
+  wire [63:0] debug_icache_miss_wait_cycles;
+  wire [63:0] debug_icache_refill_beats;
+  wire        commit_valid;
+  wire [31:0] commit_pc;
+  wire [31:0] commit_inst;
+  wire [31:0] commit_next_pc;
+  wire        commit_wen;
+  wire [4:0]  commit_rd;
+  wire [31:0] commit_wdata;
+  wire        commit_exception;
+  wire [31:0] commit_cause;
+  wire        commit_mem_wen;
+  wire        commit_mem_ren;
+  wire [31:0] commit_mem_addr;
+  wire [31:0] commit_mem_wdata;
+  wire [3:0]  commit_mem_wmask;
+  wire [31:0] commit_mem_rdata;
+  wire unused_debug = |{debug_pc, debug_halted, debug_x1, debug_a0, debug_trap_status,
+                        debug_inst, debug_mstatus, debug_mtvec, debug_mepc, debug_mcause,
+                        debug_regs_flat, debug_icache_accesses, debug_icache_hits,
+                        debug_icache_misses, debug_icache_miss_wait_cycles,
+                        debug_icache_refill_beats, commit_valid, commit_pc, commit_inst,
+                        commit_next_pc, commit_wen, commit_rd, commit_wdata,
+                        commit_exception, commit_cause, commit_mem_wen, commit_mem_ren,
+                        commit_mem_addr, commit_mem_wdata, commit_mem_wmask,
+                        commit_mem_rdata};
+`endif
+
+`ifdef NPC_DEBUG
+  wire [31:0] core_reset_pc = io_reset_pc;
+`else
+  wire [31:0] core_reset_pc = 32'd0;
+`endif
 
   wire unused_inputs = |{io_interrupt,
                          io_master_awready, io_master_wready, io_master_bvalid,
@@ -164,7 +218,7 @@ module NPC #(
   ) u_core (
     .clock(clock),
     .reset(reset),
-    .reset_pc(io_reset_pc),
+    .reset_pc(core_reset_pc),
     .debug_pc(debug_pc),
     .debug_halted(debug_halted),
     .debug_x1(debug_x1),

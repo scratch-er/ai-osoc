@@ -87,6 +87,12 @@ bool Memory::load_image_at(const std::string &path, uint32_t addr) {
   return true;
 }
 
+void Memory::set_uart_expect(const std::string &text) {
+  uart_expect_ = text;
+  uart_expect_pos_ = 0;
+  uart_expect_seen_ = false;
+}
+
 void Memory::copy_to(void *dst, uint32_t addr, uint32_t len) const {
   if (!contains(addr, len)) {
     std::fprintf(stderr, "pmem copy out of bounds: addr=0x%08x len=%u\n", addr, len);
@@ -134,6 +140,27 @@ uint32_t Memory::read32(uint32_t addr) {
 void Memory::write32(uint32_t addr, uint32_t data, uint8_t wmask) {
   if (addr == UART_BASE || (addr >= CLINT_BASE && addr < CLINT_END)) {
     mmio_record_ = {true, true, addr, mask_len(wmask), static_cast<uint8_t>(wmask & 0xf), data, 0};
+#if !NPC_DEBUG
+    if (addr == UART_BASE && (wmask & 0x1) != 0) {
+      unsigned char ch = static_cast<unsigned char>(data & 0xff);
+      if (!uart_expect_seen_ && !uart_expect_.empty()) {
+        if (ch == static_cast<unsigned char>(uart_expect_[uart_expect_pos_])) {
+          uart_expect_pos_++;
+          if (uart_expect_pos_ == uart_expect_.size()) {
+            uart_expect_seen_ = true;
+          }
+        } else {
+          uart_expect_pos_ = (ch == static_cast<unsigned char>(uart_expect_[0])) ? 1 : 0;
+        }
+      }
+      if (ch == 0x04) {
+        uart_eot_ = true;
+      } else {
+        std::putchar(ch);
+        std::fflush(stdout);
+      }
+    }
+#endif
     if (trace_) {
       std::printf("NPC_MMIO w addr=0x%08x data=0x%08x mask=0x%x\n", addr, data, wmask & 0xf);
     }
@@ -157,8 +184,23 @@ void Memory::write32(uint32_t addr, uint32_t data, uint8_t wmask) {
 
 void Memory::commit_mmio_write(uint32_t addr, uint32_t data, uint8_t wmask) {
   if (addr == UART_BASE && (wmask & 0x1) != 0) {
-    std::putchar(static_cast<unsigned char>(data & 0xff));
-    std::fflush(stdout);
+    unsigned char ch = static_cast<unsigned char>(data & 0xff);
+    if (!uart_expect_seen_ && !uart_expect_.empty()) {
+      if (ch == static_cast<unsigned char>(uart_expect_[uart_expect_pos_])) {
+        uart_expect_pos_++;
+        if (uart_expect_pos_ == uart_expect_.size()) {
+          uart_expect_seen_ = true;
+        }
+      } else {
+        uart_expect_pos_ = (ch == static_cast<unsigned char>(uart_expect_[0])) ? 1 : 0;
+      }
+    }
+    if (ch == 0x04) {
+      uart_eot_ = true;
+    } else {
+      std::putchar(ch);
+      std::fflush(stdout);
+    }
   }
 }
 

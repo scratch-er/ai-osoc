@@ -4,18 +4,24 @@ OBJ_DIR := $(BUILD_DIR)/obj_dir
 BIN := $(BUILD_DIR)/npc
 REF_SO ?= ../nemu/build/riscv32-nemu-interpreter-so
 VERILATOR ?= verilator
-CXXFLAGS += -std=c++17 -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable -Wno-unused-but-set-variable -Wno-sign-compare -O2 -I$(abspath ../nemu/include)
+NPC_DEBUG ?= 1
+RESET_PC ?= 0x20000000
+CXXFLAGS += -std=c++17 -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable -Wno-unused-but-set-variable -Wno-sign-compare -O2 -I$(abspath ../nemu/include) -DNPC_DEBUG=$(NPC_DEBUG)
 
 RTL_SRCS := $(shell find rtl -name '*.v' | sort)
-CPP_SRCS := csrc/main.cpp csrc/memory.cpp csrc/dpi.cpp csrc/difftest.cpp
+CPP_SRCS := csrc/main.cpp csrc/memory.cpp csrc/dpi.cpp
 TRACE ?= 0
 
-VERILATOR_FLAGS := -Wall --cc --exe --build --top-module $(TOP) -GLOCAL_AXI=1 -Irtl -Mdir $(OBJ_DIR) -o ../npc $(CPP_SRCS) $(RTL_SRCS)
+ifeq ($(NPC_DEBUG),1)
+CPP_SRCS += csrc/difftest.cpp
+VERILATOR_DEBUG_FLAG := +define+NPC_DEBUG
+endif
+VERILATOR_FLAGS := -Wall --cc --exe --build --top-module $(TOP) -GLOCAL_AXI=1 -GRESET_PC=$(RESET_PC) -Irtl -Mdir $(OBJ_DIR) -o ../npc $(VERILATOR_DEBUG_FLAG) $(CPP_SRCS) $(RTL_SRCS)
 ifeq ($(TRACE),1)
 VERILATOR_FLAGS += --trace
 endif
 
-.PHONY: all run smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-axi-local test-mem-latency test-access-fault test-rv32e-illegal test-csr-trap test-debug test-difftest test-clint test-icache test-fencei clean
+.PHONY: all run smoke spec-smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-axi-local test-mem-latency test-access-fault test-rv32e-illegal test-csr-trap test-debug test-difftest test-clint test-icache test-fencei clean
 
 all: $(BIN)
 
@@ -25,6 +31,14 @@ $(BIN): $(RTL_SRCS) $(CPP_SRCS)
 
 run: $(BIN)
 	$(BIN) $(ARGS)
+
+spec-smoke: $(BIN)
+	@mkdir -p $(BUILD_DIR)/tests
+	@python3 tests/make-spec-uart-bin.py $(BUILD_DIR)/tests/spec-uart.bin
+	@out="$$($(BIN) --image $(BUILD_DIR)/tests/spec-uart.bin --max-cycles 400 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'SPEC' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_SPEC_RESULT status=good reason=uart_eot' >/dev/null
 
 smoke: $(BIN)
 	@out="$$($(BIN) --max-cycles 12 2>&1)"; \
