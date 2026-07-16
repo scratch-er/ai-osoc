@@ -7,3 +7,6 @@
 [submodule "am-kernels"]
 	path = am-kernels
 	url = https://github.com/NJU-ProjectN/am-kernels.git
+[submodule "yosys-sta"]
+	path = yosys-sta
+	url = https://github.com/OSCPU/yosys-sta.git
