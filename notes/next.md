@@ -10,23 +10,30 @@ Current state:
 - Phase 6 (`Physical Built-in CLINT, UART Path, and RT-Thread Stability`) is closed and committed:
   - `8170098 Implement physical CLINT`
   - `84d258d Validate physical CLINT workloads`
-- Phase 7 (`Instruction Cache and fence.i`) is complete through `P7-S2: Full regression and bug fixing`.
+- Phase 7 (`Instruction Cache and fence.i`) is complete through `P7-S3: Linux migration, final exit check, and Phase 8 preparation`.
+- The project must remain portable across macOS and Linux. At the start of each future session, detect the current platform and choose commands/toolchain settings from the matching platform note; do not assume either macOS or Linux globally.
+- Platform notes were split out:
+  - `notes/platform-macos.md`: macOS paths/toolchain/workarounds from the previous host.
+  - `notes/platform-linux.md`: Linux host/toolchain/rebuild steps and P7 Linux validation results.
 - NPC implementation style is **Verilog**.
-- Repository status before Phase 2 already had untracked `.DS_Store`, `activate`, and top-level `.gitignore`; leave them alone unless the user explicitly asks. Current `git status --short` still shows untracked top-level `.gitignore`.
+- Repository status before Phase 2 already had untracked `.DS_Store`, `activate`, and top-level `.gitignore`; leave them alone unless the user explicitly asks. Current `git status --short` still shows untracked top-level `.gitignore` plus user/environment changes to `.gitmodules` and `yosys-sta`.
 - Top-level `build/` contains generated AM/NPC images, logs, and the ignored temporary `build/sonnet-libc-src` clone used as the Sonnet libc source reference; do not commit generated artifacts unless explicitly requested.
 
 Toolchain/config reminders:
 
-- Host has `riscv64-elf-gcc`, not `riscv64-linux-gnu-gcc`; AM commands currently need `CROSS_COMPILE=riscv64-elf-`.
-- The `am-kernels/tests/cpu-tests` wrapper command still fails on macOS because it uses `/bin/echo -e`; use the temporary Makefile/`printf` workaround below unless changing `am-kernels/` is explicitly allowed.
-- NEMU native `.config` currently shows:
-  - `CONFIG_MBASE=0x80000000`
-  - `CONFIG_MSIZE=0x8000000`
-  - `CONFIG_PC_RESET_OFFSET=0`
+- Choose `CROSS_COMPILE` per host:
+  - Linux/AOSC host from P7-S3: `CROSS_COMPILE=riscv64-linux-gnu-`.
+  - Previous macOS host: `CROSS_COMPILE=riscv64-elf-`.
+- Current Linux host has `verilator`, `yosys`, `iEDA`, `perf`, `clang`/`clang++`, `scons`, and `riscv64-linux-gnu-gcc` available; see `notes/platform-linux.md` for versions. Re-check availability on any future host.
+- `am-kernels/tests/cpu-tests/Makefile` uses `/bin/echo -e`; this is OK on Linux but not portable to macOS. Prefer the portable temporary-Makefile/`printf` loop unless intentionally testing the wrapper itself.
+- NEMU shared REF `.config` currently needs:
+  - `CONFIG_TARGET_SHARE=y`
   - `CONFIG_DEVICE=y`
   - `CONFIG_HAS_SERIAL=y`, `CONFIG_SERIAL_MMIO=0xa00003f8`
   - `CONFIG_HAS_TIMER=y`, `CONFIG_RTC_MMIO=0xa0000048`
   - keyboard/VGA/audio/disk/sdcard disabled.
+- `nemu/src/device/Kconfig` was adjusted so shared REF builds can keep `CONFIG_DEVICE=y`; this is needed for NPC UART/CLINT MMIO replay symbols in `nemu/build/riscv32-nemu-interpreter-so`.
+- Stale generated macOS helpers may reappear after checkout/context switches: rebuild `nemu/tools/fixdep` and `nemu/tools/kconfig` if `Exec format error` appears on Linux.
 - `make -C nemu menuconfig` is interactive; do not run it in automation.
 - NEMU REF shared object is `nemu/build/riscv32-nemu-interpreter-so` and exports CommitEvent/MMIO replay APIs used by NPC DiffTest.
 
@@ -357,8 +364,93 @@ Interpretation / caveats:
 - `NPC_RESULT` exact cycle counts are not stable compatibility targets after icache; use semantic status, register/trap checks, DiffTest status, and `NPC_ICACHE` consistency instead.
 - This P7-S2 closeout commit includes `npc/README.md`, `notes/plan.md`, and `notes/next.md`. The pre-existing untracked top-level `.gitignore` is intentionally left alone.
 
+## Phase 7 Session 3 / Linux closeout status
+
+`P7-S3: Linux migration, final exit check, and Phase 8 preparation` is complete.
+
+Platform migration completed:
+
+- Wrote `notes/platform-macos.md` with previous macOS-specific absolute paths, `riscv64-elf-` toolchain use, `/bin/echo -e` workaround, RT-Thread portability notes, and Mach-O generated-binary caveats.
+- Wrote `notes/platform-linux.md` with the current AOSC Linux/aarch64 host, installed tools, `riscv64-linux-gnu-` target compiler, NEMU/NPC Linux rebuild procedure, and P7 Linux validation results.
+- Rebuilt stale macOS-generated NEMU helper binaries (`fixdep`, `kconfig`) for Linux.
+- Rebuilt NEMU REF as a Linux/aarch64 ELF shared object and rebuilt NPC with Verilator.
+- Adjusted `nemu/src/device/Kconfig` so shared REF builds can include `CONFIG_DEVICE=y`, which is required for NPC UART/CLINT MMIO replay support in DiffTest.
+- Regenerated `rt-thread-am/bsp/abstract-machine/files.mk` with Linux paths via `make init` after `scons` was installed.
+
+Linux validation completed with `CROSS_COMPILE=riscv64-linux-gnu-`:
+
+1. NPC directed regression including icache/fence/access-fault/CLINT passed:
+
+```sh
+make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
+  test-mem-size test-rv32e-illegal test-csr-trap test-debug \
+  test-difftest test-clint test-icache test-fencei test-access-fault \
+  REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+```
+
+Representative counters remained consistent:
+
+- `test-clint`: `NPC_ICACHE accesses=19 hits=14 misses=5 miss_wait_cycles=30 refill_beats=20 hit_rate_x1000=736 amat_x1000=2578`.
+- `test-icache`: `NPC_ICACHE accesses=19 hits=17 misses=2 miss_wait_cycles=12 refill_beats=8 hit_rate_x1000=894 amat_x1000=1631`.
+- `test-fencei`: `NPC_ICACHE accesses=9 hits=4 misses=5 miss_wait_cycles=30 refill_beats=20 hit_rate_x1000=444 amat_x1000=4333`.
+
+2. `hello` passed with NEMU event DiffTest:
+
+- Output contained `Hello, AbstractMachine!` and `mainargs = ''.`
+- `NEMU_RESULT status=good state=2 halt_pc=0x800000c4 halt_ret=0 insts=465 limit=0`.
+- `NPC_RESULT status=good reason=good_trap cycles=2116 insts=465 pc=0x800000c4 ...`.
+- `NPC_ICACHE accesses=465 hits=297 misses=168 miss_wait_cycles=1008 refill_beats=672 hit_rate_x1000=638 amat_x1000=3167`.
+
+3. Full 35-test `cpu-tests` sweep passed with NEMU event DiffTest:
+
+`add`, `add-longlong`, `bit`, `bubble-sort`, `crc32`, `div`, `dummy`, `fact`, `fib`, `goldbach`, `hello-str`, `if-else`, `leap-year`, `load-store`, `matrix-mul`, `max`, `mersenne`, `min3`, `mov-c`, `movsx`, `mul-longlong`, `narcissistic`, `pascal`, `prime`, `quick-sort`, `recursion`, `select-sort`, `shift`, `string`, `sub-longlong`, `sum`, `switch`, `to-lower-case`, `unalign`, `wanshu`.
+
+Representative counters:
+
+- `sum`: `NPC_ICACHE accesses=528 hits=517 misses=11 miss_wait_cycles=66 refill_beats=44 hit_rate_x1000=979 amat_x1000=1125`.
+- `matrix-mul`: `NPC_RESULT status=good reason=good_trap cycles=543774 insts=131726 ...`; `NPC_ICACHE accesses=131726 hits=87058 misses=44668 miss_wait_cycles=268008 refill_beats=178672 hit_rate_x1000=660 amat_x1000=3034`.
+- `string`: `NPC_ICACHE accesses=1449 hits=1379 misses=70 miss_wait_cycles=420 refill_beats=280 hit_rate_x1000=951 amat_x1000=1289`.
+
+4. AM devscan/timer bounded smoke reached the expected timer-loop limit:
+
+- `NPC_RESULT status=limit reason=cycle_limit cycles=80000000 insts=25000215 pc=0x80000a5c ...`.
+- `NPC_ICACHE accesses=25000215 hits=24998806 misses=1409 miss_wait_cycles=8454 refill_beats=5636 hit_rate_x1000=999 amat_x1000=1000`.
+
+5. `yield-os` bounded smoke reached expected cycle limit after `ABABABAB`:
+
+- `NPC_RESULT status=limit reason=cycle_limit cycles=12000000 insts=3749488 pc=0x800000a0 ...`.
+- CSR state still showed synchronous ecall/yield trap context: `mcause=0x0000000b`.
+- `NPC_ICACHE accesses=3749488 hits=3749151 misses=337 miss_wait_cycles=2022 refill_beats=1348 hit_rate_x1000=999 amat_x1000=1000`.
+
+6. `thread-os` bounded smoke reached expected cycle limit after eight ordered `Thread-B on CPU #0` lines:
+
+- `NPC_RESULT status=limit reason=cycle_limit cycles=12000000 insts=3746560 pc=0x800001a8 ...`.
+- CSR state still showed synchronous ecall/yield trap context: `mcause=0x0000000b`.
+- `NPC_ICACHE accesses=3746560 hits=3744200 misses=2360 miss_wait_cycles=14160 refill_beats=9440 hit_rate_x1000=999 amat_x1000=1003`.
+
+7. RT-Thread passed through scripted shell `halt` with NEMU event DiffTest:
+
+- Output contained RT-Thread banner, `Hello RISC-V!`, and shell commands through `msh />halt`.
+- `NEMU_RESULT status=good state=2 halt_pc=0x8000022c halt_ret=0 insts=511842 limit=0`.
+- `NPC_RESULT status=good reason=good_trap cycles=1816964 insts=511842 pc=0x8001f718 ...`.
+- `NPC_ICACHE accesses=511842 hits=428931 misses=82911 miss_wait_cycles=497466 refill_beats=331644 hit_rate_x1000=838 amat_x1000=1971`.
+
+Phase 7 exit criteria are met on Linux:
+
+- All previous functional tests pass with icache enabled.
+- `fence.i` invalidates cached instructions (`test-fencei` passed).
+- Instruction-cache refill uses 16-byte AXI bursts; representative successful runs still have `refill_beats == misses * 4`.
+- AMAT counters are emitted and internally consistent.
+- Phase 8 has reproducible per-platform commands and representative Linux counter output to start from; macOS commands are kept in `notes/platform-macos.md` and should be revalidated when running on macOS again.
+
 ## Next steps
 
-1. Start `P7-S3: Re-check Phase 7 exit criteria and plan Phase 8`.
-2. In P7-S3, explicitly confirm Phase 7 exit criteria.
-3. Produce the Phase 8 measurement/PPA baseline plan, including which workloads to measure, which counters to record, and the exact commands to use.
+1. Start `P8-S1: Guard debug ports and add a spec-interface simulation harness` on Linux.
+2. Introduce an RTL macro such as `NPC_DEBUG`:
+   - `NPC_DEBUG=1`: preserve current Verilator/DiffTest/debug flow.
+   - `NPC_DEBUG=0`: expose only the top-level interface specified in `specs/core.md`.
+3. Add a minimal spec-interface harness that does not use debug/commit ports, can load/run a small binary, services AXI memory/device accesses, and prints UART writes to `0x10000000`.
+4. Validate both modes before moving to P8-S2:
+   - debug mode: P7 directed regression with DiffTest passes.
+   - spec mode: build/elaboration succeeds and the spec harness prints UART output.
+5. After P8-S1, proceed to Linux timing/PPA baseline and targeted optimization in P8-S2. Record the flow and lessons in `notes/p8-timing-and-ppa.md`.

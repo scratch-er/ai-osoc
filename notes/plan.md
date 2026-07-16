@@ -631,14 +631,13 @@ Sessions:
    - UART output remained ordered/non-duplicated, CLINT DiffTest replay still worked, access faults and misalignment behavior remained correct, and `refill_beats == misses * 4` held for representative successful local-memory refills.
    - Exit status: all previous Phase 6 functional tests pass, expected bounded runs remain narrowly documented, no known icache correctness regression remains, and counter output is stable enough for Phase 8.
 
-3. **P7-S3: Re-check Phase 7 exit criteria and plan Phase 8**
-   - Re-run a focused confirmation set after any fixes from P7-S2.
-   - Check Phase 7 exit criteria explicitly.
-   - Record exact validation commands, pass/fail results, known caveats, and representative counter output.
-   - Update `notes/plan.md` and `notes/next.md`.
-   - Plan Phase 8 around measurement/PPA baselining: workloads, counters, commands, and what counts as a useful baseline.
-   - Commit after user approval.
-   - Exit status: Phase 7 is closed in notes; Phase 8 has a concrete measurement plan; the next session can start from notes without hidden context.
+3. **P7-S3: Linux migration, final exit check, and Phase 8 preparation** — done.
+   - Split platform-specific notes into `notes/platform-macos.md` and `notes/platform-linux.md`.
+   - Validated the Linux/AOSC aarch64 host using its local target compiler setting, `CROSS_COMPILE=riscv64-linux-gnu-`; macOS remains supported via `notes/platform-macos.md` and its `riscv64-elf-` setting.
+   - Rebuilt stale macOS-generated NEMU helpers on Linux, rebuilt the NEMU shared REF and NPC simulator natively, and regenerated RT-Thread AM file metadata with Linux paths.
+   - Adjusted `nemu/src/device/Kconfig` so `CONFIG_TARGET_SHARE=y` can still build with `CONFIG_DEVICE=y`; this keeps NPC UART/CLINT MMIO replay support in the DiffTest shared REF and is not Linux-specific.
+   - Re-ran the P7 closeout suite on Linux: NPC directed regression, full 35-test `cpu-tests`, `hello`, AM devscan/timer bounded smoke, `yield-os`/`thread-os` bounded smokes, and RT-Thread with DiffTest.
+   - Exit status: Phase 7 is closed with Linux validation added; Phase 8 has per-platform notes and representative counter output in `notes/platform-linux.md`, `notes/platform-macos.md`, and `notes/next.md`.
 
 Exit criteria:
 
@@ -648,33 +647,59 @@ Exit criteria:
 - AMAT counters are emitted and internally consistent.
 - Phase 8 has reproducible commands and representative counter output to start from.
 
-## Phase 8: Performance Measurement and PPA Baselines
+## Phase 8: Linux PPA, Optimization, and Spec-Interface Readiness
 
-Goal: quantify the design before optimization and keep results reproducible.
+Goal: make the synthesis target spec-compliant, measure timing/PPA and performance on Linux, perform one measured optimization, and leave a reusable timing/PPA workflow for future pipeline work.
 
 Relevant lecture guidance:
 
-- B4 performance evaluation and Amdahl's law.
+- B4 performance evaluation, icache/AMAT, and Amdahl's law.
+- B3/B4 timing/PPA measurement flow.
 - PA5 profiling mindset.
 
-Tasks:
+Scope decisions:
 
-1. Add a standard performance report emitted by simulation or scripts:
-   - cycles
-   - retired instructions
-   - IPC
-   - instruction class counts
-   - IFU/LSU wait cycles
-   - icache AMAT counters
-2. Run `coremark` and selected smaller workloads under reproducible commands.
-3. Record results in notes with commit/hash, command, config, and observed counters.
-4. Run synthesis/timing/area estimation if the required toolchain is available.
-5. Use Amdahl's law and counters to decide the next optimization target.
+- P8 timing/PPA is Linux-only because the available iEDA flow is Linux-only in the current environment.
+- macOS remains valid for functionality work outside Linux-only PPA tooling.
+- Do not add broad emulator/DiffTest infrastructure in P8.
+- Use `CROSS_COMPILE=riscv64-linux-gnu-` on the current Linux host.
+- Keep VCD generation bounded and optional.
+
+Sessions:
+
+1. **P8-S1: Guard debug ports and add a spec-interface simulation harness**
+   - Introduce an RTL macro such as `NPC_DEBUG`.
+   - With `NPC_DEBUG` undefined, make `npc/rtl/NPC.v` expose exactly the top-level interface in `specs/core.md`.
+   - With `NPC_DEBUG=1`, preserve the current Verilator/DiffTest/debug flow.
+   - Guard debug/test-only ports and top-level exposure: `io_reset_pc`, `debug_*`, and `commit_*`.
+   - Keep functional datapath/control logic unchanged.
+   - Add a minimal spec-interface C++/Verilator harness that does not use debug/commit ports and can load/run a binary, service AXI memory/device accesses, and print UART writes to `0x10000000`.
+   - Validate both modes: debug-mode P7 directed regression passes; spec-mode build/elaboration works; spec harness runs at least one meaningful UART/hello-style program.
+
+2. **P8-S2: Analyze baseline PPA/performance and perform targeted optimization**
+   - Run Linux tool smoke for `yosys` and `iEDA`.
+   - Run synthesis/timing baseline in `NPC_DEBUG=0` spec mode with `yosys-sta`.
+   - Run performance baseline in `NPC_DEBUG=1` debug mode using existing stable lines (`NPC_RESULT`, `NPC_ICACHE`, and `NEMU_RESULT` where available).
+   - Baseline workloads: `hello`, selected `cpu-tests` (`sum`, `string`, `crc32`, `quick-sort`, `matrix-mul`), `coremark`, and `rt-thread-am`.
+   - Record commands/results in a new dedicated note `notes/p8-timing-and-ppa.md`.
+   - Choose and implement one small measured optimization based on timing/PPA or performance evidence. Candidate areas include removing residual debug fanout from spec mode, simplifying a critical datapath/control path, or a tightly justified icache/PPA cleanup. Do not start pipeline refactoring.
+   - Validate before/after with spec-mode synthesis smoke, debug-mode directed regression, and the workload subset that motivated the optimization.
+
+3. **P8-S3: Closing P8**
+   - Run final debug-mode practical regression after the last RTL change.
+   - Run final spec-mode validation: `NPC_DEBUG=0` elaboration/synthesis smoke and minimal spec harness.
+   - Finish `notes/p8-timing-and-ppa.md` with timing/PPA command flow, result table, optimization before/after comparison, warnings, and lessons useful for future pipeline refactoring.
+   - Update `notes/plan.md` and `notes/next.md`.
 
 Exit criteria:
 
-- A baseline table exists in notes.
-- At least `hello`, `cpu-tests`, `coremark`, and `rt-thread-am` have recorded status.
+- `NPC_DEBUG=0` top-level interface is spec-compliant.
+- `NPC_DEBUG=1` debug/DiffTest flow still works.
+- Minimal spec-interface harness can run a small program and print UART output.
+- Linux timing/PPA baseline is recorded, or a precise blocker is documented.
+- At least one optimization is attempted and evaluated with before/after data, or explicitly deferred with measurement-backed evidence.
+- `notes/p8-timing-and-ppa.md` explains the flow well enough to repeat after future pipeline refactoring.
+- At least `hello`, representative `cpu-tests`, `coremark`, and `rt-thread-am` have recorded status.
 
 ## Phase 9: Optional Pipeline and Targeted Optimizations
 
