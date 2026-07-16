@@ -589,10 +589,73 @@ make -C npc clean && make -C npc smoke test-addi test-jalr-ebreak test-lw-sw tes
   REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
 ```
 
+## Phase 8 Session 3 / closeout status
+
+`P8-S3: Closing P8` is implemented and validated on Linux. Do not commit unless the user explicitly asks; higher-priority runtime instructions require explicit confirmation before git mutations.
+
+Final P8-S3 changes:
+
+- `npc/rtl/core/Core.v` now constant-drives hidden debug/commit observation outputs under `NPC_DEBUG=0`, so physical spec-mode synthesis no longer preserves those observation expressions.
+- `npc/rtl/core/RegFile.v` now constant-drives `debug_x1`, `debug_a0`, and `debug_regs_flat` under `NPC_DEBUG=0`, removing physical register-file debug fanout.
+- A physical-mode register-file reset removal experiment was tried and rejected because STA worsened to roughly `465 MHz` around the checked `580 MHz` target.
+
+Final physical STA under `icsprout55`, output root `build/p8-s3-close/final-phys/`:
+
+- command:
+
+```sh
+make -C npc sta-sweep \
+  STA_O=../build/p8-s3-close/final-phys \
+  STA_LOG_DIR=../build/p8-s3-close/final-phys-logs \
+  STA_FREQS="580 600 605 610 620"
+```
+
+- area `22685.320000`, sequential area `8001.840000`, `DFFQX1H7L=1299`, `ICGX0P5H7L=15`.
+- worst core path delay `1.583 ns`; reported Fmax `614.531 MHz`.
+- clean checked target: `610 MHz` with slack `0.012 ns`.
+- first failing checked target: `620 MHz` with slack `-0.015 ns`.
+- worst endpoint: register-file write flop such as `u_core.u_regfile.regs[3]_1__reg_p:D`.
+- Compared with P8-S2 optimized top: area improved by `70.28` and reported Fmax improved from `540.333 MHz` to `614.531 MHz`.
+
+P8-S3 validation completed:
+
+1. Spec-mode smoke passed:
+
+```sh
+make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke
+```
+
+Output included `SPEC` and `NPC_SPEC_RESULT status=good reason=uart_eot cycles=61 limit=400`.
+
+2. Debug-mode directed/DiffTest regression passed:
+
+```sh
+make -C npc clean && make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
+  test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest \
+  test-clint test-icache test-fencei test-access-fault \
+  REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+```
+
+Representative final subtest passed with `NEMU_RESULT status=good`, `NPC_CHECK x1=0x00000007 ... PASS`, and `NPC_RESULT status=good reason=good_trap`.
+
+3. Optimized core RT-Thread with NEMU event DiffTest passed:
+
+```sh
+make -C rt-thread-am/bsp/abstract-machine ARCH=riscv32e-npc \
+  AM_HOME=/host/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-linux-gnu- NPC_MAX_CYCLES=12000000 \
+  NPC_DIFFTEST_REF=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+Final lines included `NEMU_RESULT status=good state=2 halt_pc=0x8000022c halt_ret=0 insts=511842 limit=0`, `NPC_RESULT status=good reason=good_trap cycles=1816964 insts=511842 pc=0x8001f718 ...`, and `NPC_ICACHE accesses=511842 hits=428931 misses=82911 miss_wait_cycles=497466 refill_beats=331644 hit_rate_x1000=838 amat_x1000=1971`.
+
+Notes updated:
+
+- `notes/p8-timing-and-ppa.md` now contains the P8-S3 final timing cleanup, final sweep table, before/after comparison, validation, and remaining caveats.
+- `notes/plan.md` marks `P8-S3: Closing P8` complete and records final STA/validation details.
+
 ## Next steps
 
-1. Proceed to `P8-S3: Closing P8`.
-2. Run final debug-mode practical regression and final spec-mode validation.
-3. Review `notes/p8-timing-and-ppa.md` for completeness and update it with any P8-S3 final checks.
-4. Update `notes/plan.md` and `notes/next.md` at closeout.
-5. Ask the user before making any git commit.
+1. If the user wants to persist the closeout, ask before making a git commit.
+2. Start Phase 9 only if requested: decide whether to pipeline based on current counters and P8 timing/PPA results.
+3. Keep the STA caveat in mind: current timing is standalone core-top STA with only a core clock constraint; no SoC AXI input/output delays are modeled yet.

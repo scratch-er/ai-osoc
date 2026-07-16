@@ -683,11 +683,13 @@ Sessions:
    - Optimized result at 100 MHz: area `22755.600000` (-0.49%), worst core max path `1.799 ns`, slack `8.149 ns`, reported Fmax `540.333 MHz`, iEDA total power estimate `2.9042 W`.
    - Validation after optimization passed: `NPC_DEBUG=0 spec-smoke`, optimized physical synthesis/STA, and the debug-mode directed/DiffTest regression through access-fault tests.
 
-3. **P8-S3: Closing P8**
-   - Run final debug-mode practical regression after the last RTL change.
-   - Run final spec-mode validation: `NPC_DEBUG=0` elaboration/synthesis smoke and minimal spec harness.
-   - Finish `notes/p8-timing-and-ppa.md` with timing/PPA command flow, result table, optimization before/after comparison, warnings, and lessons useful for future pipeline refactoring.
-   - Update `notes/plan.md` and `notes/next.md`.
+3. **P8-S3: Closing P8** — complete on Linux.
+   - Re-ran the current physical STA baseline and measured the P8-S2 top at `540 MHz` clean / `550 MHz` failing before the final cleanup.
+   - Tried and rejected removing physical-mode register-file reset because it worsened timing to roughly `465 MHz` around the checked `580 MHz` target.
+   - Kept the final low-risk physical-mode cleanup: `NPC_DEBUG=0` constant-drives hidden debug/commit outputs in `Core.v`, and `RegFile.v` constant-drives debug register outputs.
+   - Final physical STA result: area `22685.320000`, sequential area `8001.840000`, worst path `1.583 ns`, reported Fmax `614.531 MHz`, clean checked target `610 MHz`, first failing checked target `620 MHz` with slack `-0.015 ns`.
+   - Final validation passed: `NPC_DEBUG=0 spec-smoke`, debug-mode directed/DiffTest regression through access-fault tests, and optimized-core RT-Thread with NEMU event DiffTest through scripted shell `halt`.
+   - Updated `notes/p8-timing-and-ppa.md` with timing/PPA command flow, result table, optimization before/after comparison, warnings, and lessons useful for future pipeline refactoring.
 
 Exit criteria:
 

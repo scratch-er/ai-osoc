@@ -18,6 +18,7 @@ module RegFile (
 
   assign rdata1 = (raddr1 == 4'd0) ? 32'd0 : regs[raddr1];
   assign rdata2 = (raddr2 == 4'd0) ? 32'd0 : regs[raddr2];
+`ifdef NPC_DEBUG
   assign debug_x1 = regs[4'd1];
   assign debug_a0 = regs[4'd10];
   assign debug_regs_flat = {
@@ -26,6 +27,11 @@ module RegFile (
     regs[4'd7],  regs[4'd6],  regs[4'd5],  regs[4'd4],
     regs[4'd3],  regs[4'd2],  regs[4'd1],  32'd0
   };
+`else
+  assign debug_x1 = 32'd0;
+  assign debug_a0 = 32'd0;
+  assign debug_regs_flat = 512'd0;
+`endif
 
   always @(posedge clock) begin
     if (reset) begin

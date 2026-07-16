@@ -181,9 +181,89 @@ make -C npc clean && make -C npc smoke test-addi test-jalr-ebreak test-lw-sw tes
 
 Result: passed. Representative checks included `test-clint`, `test-icache`, `test-fencei`, and all access-fault subtests with NEMU event DiffTest.
 
-## Remaining caveats for P8-S3
+## P8-S3 final timing cleanup
 
-- The baseline and optimized STA use a simple SDC that only creates the core clock. No input/output delays are modeled for the SoC AXI boundary yet.
+P8-S3 re-ran the current physical STA baseline and then made one additional low-risk physical-mode cleanup:
+
+- In `NPC_DEBUG=0`, `Core.v` now drives hidden debug/commit observation outputs to constants instead of preserving the internal observation expressions.
+- In `NPC_DEBUG=0`, `RegFile.v` drives `debug_x1`, `debug_a0`, and `debug_regs_flat` to constants so physical synthesis does not preserve register-file debug fanout.
+- The discarded experiment of removing physical-mode register-file reset was measured and rejected: it worsened the critical path to roughly `465 MHz` around the checked `580 MHz` target.
+
+Final physical frequency sweep command:
+
+```sh
+make -C npc sta-sweep \
+  STA_O=../build/p8-s3-close/final-phys \
+  STA_LOG_DIR=../build/p8-s3-close/final-phys-logs \
+  STA_FREQS="580 600 605 610 620"
+```
+
+Final P8 physical result under `icsprout55`:
+
+| Target MHz | Worst setup slack | Path delay | Required | Reported Fmax | Worst endpoint |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 600 | 0.039 ns | 1.583 ns | 1.622 ns | 614.531 MHz | `u_core.u_regfile.regs[3]_1__reg_p:D` |
+| 610 | 0.012 ns | 1.583 ns | 1.595 ns | 614.531 MHz | `u_core.u_regfile.regs[3]_1__reg_p:D` |
+| 620 | -0.015 ns | 1.583 ns | 1.568 ns | 614.531 MHz | `u_core.u_regfile.regs[3]_1__reg_p:D` |
+
+Final synthesis result:
+
+```text
+synth_check: Found and reported 0 problems.
+Chip area: 22685.320000
+Sequential area: 8001.840000 (35.27%)
+DFFQX1H7L: 1299
+ICGX0P5H7L: 15
+```
+
+Comparison against the P8-S2 optimized top:
+
+| Metric | P8-S2 optimized | P8-S3 final | Delta |
+| --- | ---: | ---: | ---: |
+| Area | 22755.600000 | 22685.320000 | -70.280000 (-0.31%) |
+| Sequential area | 8001.840000 | 8001.840000 | 0 |
+| Worst core path delay | 1.799 ns | 1.583 ns | -0.216 ns |
+| Reported core Fmax | 540.333 MHz | 614.531 MHz | +74.198 MHz |
+| Clean target | 540 MHz | 610 MHz | +70 MHz |
+| First failing checked target | 550 MHz | 620 MHz | +70 MHz |
+
+Interpretation: the final cleanup is worth keeping. It removes non-physical debug/commit fanout from the spec-mode physical top and recovers the pre-cleanup timing headroom while further reducing area slightly. The current single-cycle-like NPC closes a clean checked `610 MHz` in this standalone core-top STA; `620 MHz` fails by about `15 ps`.
+
+P8-S3 final validation:
+
+1. Spec-mode smoke passed:
+
+```sh
+make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke
+```
+
+Output included `SPEC` and `NPC_SPEC_RESULT status=good reason=uart_eot cycles=61 limit=400`.
+
+2. Debug-mode directed/DiffTest regression passed:
+
+```sh
+make -C npc clean && make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
+  test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest \
+  test-clint test-icache test-fencei test-access-fault \
+  REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+```
+
+Representative tail included the store-access-fault subtest passing with `NEMU_RESULT status=good`, `NPC_CHECK x1=0x00000007 ... PASS`, and `NPC_RESULT status=good reason=good_trap`.
+
+3. Optimized core RT-Thread with NEMU event DiffTest passed:
+
+```sh
+make -C rt-thread-am/bsp/abstract-machine ARCH=riscv32e-npc \
+  AM_HOME=/host/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-linux-gnu- NPC_MAX_CYCLES=12000000 \
+  NPC_DIFFTEST_REF=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+Result: passed through scripted shell `halt`. Final lines included `NEMU_RESULT status=good state=2 halt_pc=0x8000022c halt_ret=0 insts=511842 limit=0`, `NPC_RESULT status=good reason=good_trap cycles=1816964 insts=511842 pc=0x8001f718 ...`, and `NPC_ICACHE accesses=511842 hits=428931 misses=82911 miss_wait_cycles=497466 refill_beats=331644 hit_rate_x1000=838 amat_x1000=1971`.
+
+## Remaining caveats after P8-S3
+
+- The STA flow still uses a simple SDC that only creates the core clock. No input/output delays are modeled for the SoC AXI boundary yet.
 - iEDA reports many no-driver/no-load messages for top-level SoC-facing ports because this is a standalone core-top STA, not full SoC STA.
 - CoreMark default run is bounded rather than terminating due to `ITERATIONS=1000`; do not modify `am-kernels/` unless the user explicitly requests it.
-- P8-S3 should run the final practical regression and update this note if more optimization is attempted.
+- The single-cycle-like design now has a measured standalone timing baseline; future major performance work should likely be Phase 9 pipelining rather than further local mux cleanup.

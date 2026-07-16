@@ -205,7 +205,12 @@ module Core #(
   wire [31:0] normal_next_pc = is_mret ? mepc : (is_jalr ? jalr_target : (is_jal ? jal_target : (branch_taken ? branch_target : pc_plus_4)));
   wire [31:0] final_wb_data = wb_data;
   wire        bad_without_vector;
+`ifdef NPC_DEBUG
   wire        unused = |{opcode, funct3, funct7, mcause};
+`else
+  wire        unused = |{opcode, funct3, funct7, mcause, mstatus, trap_status,
+                         lsu_write_addr, lsu_write_data, lsu_write_mask};
+`endif
 
   assign branch_target_misaligned = branch_taken && branch_target[1:0] != 2'b00;
   assign jal_target_misaligned = is_jal && jal_target[1:0] != 2'b00;
@@ -246,6 +251,7 @@ module Core #(
   assign alu_src2 = src2_imm ? imm_data : rs2_data;
   assign lsu_addr = rs1_data + (mem_wen ? imm_s : imm_i);
 
+`ifdef NPC_DEBUG
   assign debug_pc = pc;
   assign debug_halted = halted;
   assign debug_trap_status = trap_status;
@@ -269,6 +275,31 @@ module Core #(
   assign commit_mem_wdata = lsu_write_data;
   assign commit_mem_wmask = lsu_write_mask;
   assign commit_mem_rdata = lsu_rdata;
+`else
+  assign debug_pc = 32'd0;
+  assign debug_halted = 1'b0;
+  assign debug_trap_status = `NPC_STATUS_RUNNING;
+  assign debug_inst = 32'd0;
+  assign debug_mstatus = 32'd0;
+  assign debug_mtvec = 32'd0;
+  assign debug_mepc = 32'd0;
+  assign debug_mcause = 32'd0;
+  assign commit_valid = 1'b0;
+  assign commit_pc = 32'd0;
+  assign commit_inst = 32'd0;
+  assign commit_next_pc = 32'd0;
+  assign commit_wen = 1'b0;
+  assign commit_rd = 5'd0;
+  assign commit_wdata = 32'd0;
+  assign commit_exception = 1'b0;
+  assign commit_cause = 32'd0;
+  assign commit_mem_wen = 1'b0;
+  assign commit_mem_ren = 1'b0;
+  assign commit_mem_addr = 32'd0;
+  assign commit_mem_wdata = 32'd0;
+  assign commit_mem_wmask = 4'd0;
+  assign commit_mem_rdata = 32'd0;
+`endif
 
   assign ifu_invalidate = retire_ready && complete_inst && is_fence_i;
 
