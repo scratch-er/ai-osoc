@@ -527,9 +527,72 @@ make -C am-kernels/kernels/hello ARCH=riscv32e-npc \
 
 Result: passed. Output contained `Hello, AbstractMachine!`, `mainargs = ''.`, `NEMU_RESULT status=good state=2 halt_pc=0x800000c4 halt_ret=0 insts=465 limit=0`, `NPC_RESULT status=good reason=good_trap cycles=2116 insts=465 ...`, and `NPC_ICACHE accesses=465 hits=297 misses=168 ...`.
 
+## Phase 8 Session 2 status
+
+`P8-S2: Analyze baseline PPA/performance and perform targeted optimization` is implemented and validated on Linux. Do not commit unless the user explicitly asks; the project rule says to commit at session end, but higher-priority runtime instructions require explicit confirmation before git mutations.
+
+Key implementation details:
+
+- PPA/STA now targets the SoC-connectable physical top only:
+  - `NPC_DEBUG=0` / no `+define+NPC_DEBUG`.
+  - Physical RTL list excludes Verilator-only `npc/rtl/bus/LocalAxiSlave.v` and `npc/rtl/bus/MemIf.v`.
+  - `npc/rtl/NPC.v` wraps the local AXI simulation slave, its local wires, and local/core muxing in `NPC_LOCAL_AXI`.
+  - `npc/Makefile` passes `+define+NPC_LOCAL_AXI` to Verilator builds so the existing local-memory simulation harness still works.
+- `yosys-sta/scripts/yosys.tcl` now supports `VERILOG_INCLUDE_DIRS`, needed for includes such as `include/npc_defines.vh` when synthesizing from `yosys-sta/` with absolute RTL paths.
+- Spec-mode hidden debug/commit fanout cleanup:
+  - Removed the `unused_debug` reduction that preserved `debug_*`/`commit_*` logic in `NPC_DEBUG=0` physical synthesis.
+  - Kept the internal wires for the existing `Core` interface and wrapped them with Verilator `UNUSED` lint pragmas.
+
+PPA/STA recorded in `notes/p8-timing-and-ppa.md`:
+
+- Tooling: Yosys 0.67 and iEDA on Linux. The older Yosys 0.45 lacked the `clockgate` command; after the user upgraded Yosys, synthesis ran.
+- `npc/Makefile` now wraps the physical `yosys-sta` flow:
+  - `make -C npc sta CLK_FREQ_MHZ=540 STA_O=../build/p8-s2-ppa/npc-sta`
+  - `make -C npc sta-sweep STA_O=../build/p8-s2-ppa/npc-sta-sweep STA_FREQS="100 300 500 530 540 550 560 600 700"`
+- Current optimized physical sweep under `icsprout55`:
+  - area `22755.600000`, sequential area `8001.840000`, `DFFQX1H7L=1299`, `ICGX0P5H7L=15`.
+  - worst path delay `1.799 ns`; reported Fmax `540.333 MHz`.
+  - clean target: `540 MHz` with slack `0.000 ns`.
+  - first failing checked target: `550 MHz` with slack `-0.033 ns`.
+  - critical endpoint: `u_core.u_regfile.regs[7]_29__reg_p:D`; path is mostly mux/buffer/control logic feeding the register-file write port.
+- Earlier 100 MHz baseline before cleanup remains in the note for comparison, but the actionable STA result is now the Makefile-wrapped frequency sweep.
+
+Performance baseline recorded in `notes/p8-timing-and-ppa.md`:
+
+- `hello`: good trap, `cycles=2116`, `insts=465`, `hit_rate_x1000=638`, `amat_x1000=3167`.
+- `cpu-tests/sum`: good trap, `cycles=1532`, `insts=528`, `hit_rate_x1000=979`, `amat_x1000=1125`.
+- `cpu-tests/string`: good trap, `cycles=4260`, `insts=1449`, `hit_rate_x1000=951`, `amat_x1000=1289`.
+- `cpu-tests/crc32`: good trap, `cycles=67892`, `insts=18163`, `hit_rate_x1000=740`, `amat_x1000=2557`.
+- `cpu-tests/quick-sort`: good trap, `cycles=11854`, `insts=3041`, `hit_rate_x1000=758`, `amat_x1000=2446`.
+- `cpu-tests/matrix-mul`: good trap, `cycles=543774`, `insts=131726`, `hit_rate_x1000=660`, `amat_x1000=3034`.
+- `coremark`: bounded default `ITERATIONS=1000`, reached `cycles=120000000`, `insts=37471468`, `hit_rate_x1000=845`, `amat_x1000=1924`; did not terminate. Do not modify `am-kernels/` unless explicitly asked.
+- `rt-thread-am`: good trap through scripted shell `halt`, `cycles=1816964`, `insts=511842`, `hit_rate_x1000=838`, `amat_x1000=1971`.
+
+Validation after optimization:
+
+1. Spec-mode smoke passed:
+
+```sh
+make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke
+```
+
+Output included `SPEC` and `NPC_SPEC_RESULT status=good reason=uart_eot cycles=61 limit=400`.
+
+2. Optimized physical synthesis and STA completed with output under `build/p8-s2-ppa/opt-no-debug-reduce/NPC-100MHz/`.
+
+3. Debug-mode directed/DiffTest regression passed:
+
+```sh
+make -C npc clean && make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
+  test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest \
+  test-clint test-icache test-fencei test-access-fault \
+  REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+```
+
 ## Next steps
 
-1. Let the user revise the P8-S1 changes.
-2. After the user says revisions are done, make the requested commit with user `bot` and email `iamabot@example.com`.
-3. Then proceed to `P8-S2: Analyze baseline PPA/performance and perform targeted optimization` on Linux.
-4. In P8-S2, record the timing/PPA flow and lessons in `notes/p8-timing-and-ppa.md`.
+1. Proceed to `P8-S3: Closing P8`.
+2. Run final debug-mode practical regression and final spec-mode validation.
+3. Review `notes/p8-timing-and-ppa.md` for completeness and update it with any P8-S3 final checks.
+4. Update `notes/plan.md` and `notes/next.md` at closeout.
+5. Ask the user before making any git commit.

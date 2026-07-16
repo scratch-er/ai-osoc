@@ -9,6 +9,25 @@ RESET_PC ?= 0x20000000
 CXXFLAGS += -std=c++17 -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable -Wno-unused-but-set-variable -Wno-sign-compare -O2 -I$(abspath ../nemu/include) -DNPC_DEBUG=$(NPC_DEBUG)
 
 RTL_SRCS := $(shell find rtl -name '*.v' | sort)
+STA_RTL_SRCS := \
+	$(abspath rtl/NPC.v) \
+	$(abspath rtl/core/Core.v) \
+	$(abspath rtl/core/Ifu.v) \
+	$(abspath rtl/bus/AxiMaster.v) \
+	$(abspath rtl/bus/AxiArbiter.v) \
+	$(abspath rtl/core/Lsu.v) \
+	$(abspath rtl/core/Csr.v) \
+	$(abspath rtl/core/Idu.v) \
+	$(abspath rtl/core/Exu.v) \
+	$(abspath rtl/core/RegFile.v) \
+	$(abspath rtl/core/Wbu.v) \
+	$(abspath rtl/core/Clint.v)
+YOSYS_STA_DIR ?= ../yosys-sta
+STA_PDK ?= icsprout55
+CLK_FREQ_MHZ ?= 100
+STA_O ?= ../build/p8-s2-ppa/npc-sta
+STA_FREQS ?= 100 300 500 530 540 550 560 600 700
+STA_LOG_DIR ?= ../build/p8-s2-ppa
 CPP_SRCS := csrc/main.cpp csrc/memory.cpp csrc/dpi.cpp
 TRACE ?= 0
 
@@ -16,14 +35,28 @@ ifeq ($(NPC_DEBUG),1)
 CPP_SRCS += csrc/difftest.cpp
 VERILATOR_DEBUG_FLAG := +define+NPC_DEBUG
 endif
-VERILATOR_FLAGS := -Wall --cc --exe --build --top-module $(TOP) -GLOCAL_AXI=1 -GRESET_PC=$(RESET_PC) -Irtl -Mdir $(OBJ_DIR) -o ../npc $(VERILATOR_DEBUG_FLAG) $(CPP_SRCS) $(RTL_SRCS)
+VERILATOR_FLAGS := -Wall --cc --exe --build --top-module $(TOP) -GLOCAL_AXI=1 -GRESET_PC=$(RESET_PC) -Irtl -Mdir $(OBJ_DIR) -o ../npc +define+NPC_LOCAL_AXI $(VERILATOR_DEBUG_FLAG) $(CPP_SRCS) $(RTL_SRCS)
 ifeq ($(TRACE),1)
 VERILATOR_FLAGS += --trace
 endif
 
-.PHONY: all run smoke spec-smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-axi-local test-mem-latency test-access-fault test-rv32e-illegal test-csr-trap test-debug test-difftest test-clint test-icache test-fencei clean
+.PHONY: all run sta sta-sweep smoke spec-smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-axi-local test-mem-latency test-access-fault test-rv32e-illegal test-csr-trap test-debug test-difftest test-clint test-icache test-fencei clean
 
 all: $(BIN)
+
+sta:
+	VERILOG_INCLUDE_DIRS=$(abspath rtl) $(MAKE) -C $(YOSYS_STA_DIR) syn sta \
+		DESIGN=$(TOP) PDK=$(STA_PDK) O=$(abspath $(STA_O)) \
+		CLK_PORT_NAME=clock CLK_FREQ_MHZ=$(CLK_FREQ_MHZ) \
+		RTL_FILES="$(STA_RTL_SRCS)"
+
+sta-sweep:
+	@mkdir -p $(STA_LOG_DIR)
+	@set -e; \
+	for f in $(STA_FREQS); do \
+		echo "== STA $$f MHz =="; \
+		$(MAKE) sta CLK_FREQ_MHZ=$$f > $(STA_LOG_DIR)/npc-sta-$$f.make.log 2>&1; \
+	done
 
 $(BIN): $(RTL_SRCS) $(CPP_SRCS)
 	@mkdir -p $(BUILD_DIR)

@@ -116,6 +116,7 @@ module NPC #(
   wire core_rlast;
   wire [3:0] core_rid;
 
+`ifdef NPC_LOCAL_AXI
   wire local_awready;
   wire local_wready;
   wire local_bvalid;
@@ -127,8 +128,10 @@ module NPC #(
   wire [31:0] local_rdata;
   wire local_rlast;
   wire [3:0] local_rid;
+`endif
 
 `ifndef NPC_DEBUG
+  /* verilator lint_off UNUSED */
   wire [31:0] debug_pc;
   wire        debug_halted;
   wire [31:0] debug_x1;
@@ -160,15 +163,7 @@ module NPC #(
   wire [31:0] commit_mem_wdata;
   wire [3:0]  commit_mem_wmask;
   wire [31:0] commit_mem_rdata;
-  wire unused_debug = |{debug_pc, debug_halted, debug_x1, debug_a0, debug_trap_status,
-                        debug_inst, debug_mstatus, debug_mtvec, debug_mepc, debug_mcause,
-                        debug_regs_flat, debug_icache_accesses, debug_icache_hits,
-                        debug_icache_misses, debug_icache_miss_wait_cycles,
-                        debug_icache_refill_beats, commit_valid, commit_pc, commit_inst,
-                        commit_next_pc, commit_wen, commit_rd, commit_wdata,
-                        commit_exception, commit_cause, commit_mem_wen, commit_mem_ren,
-                        commit_mem_addr, commit_mem_wdata, commit_mem_wmask,
-                        commit_mem_rdata};
+  /* verilator lint_on UNUSED */
 `endif
 
 `ifdef NPC_DEBUG
@@ -201,6 +196,7 @@ module NPC #(
   assign io_slave_rlast = 1'b0;
   assign io_slave_rid = 4'd0;
 
+`ifdef NPC_LOCAL_AXI
   assign core_awready = (LOCAL_AXI != 0) ? local_awready : io_master_awready;
   assign core_wready = (LOCAL_AXI != 0) ? local_wready : io_master_wready;
   assign core_bvalid = (LOCAL_AXI != 0) ? local_bvalid : io_master_bvalid;
@@ -212,6 +208,19 @@ module NPC #(
   assign core_rdata = (LOCAL_AXI != 0) ? local_rdata : io_master_rdata;
   assign core_rlast = (LOCAL_AXI != 0) ? local_rlast : io_master_rlast;
   assign core_rid = (LOCAL_AXI != 0) ? local_rid : io_master_rid;
+`else
+  assign core_awready = io_master_awready;
+  assign core_wready = io_master_wready;
+  assign core_bvalid = io_master_bvalid;
+  assign core_bresp = io_master_bresp;
+  assign core_bid = io_master_bid;
+  assign core_arready = io_master_arready;
+  assign core_rvalid = io_master_rvalid;
+  assign core_rresp = io_master_rresp;
+  assign core_rdata = io_master_rdata;
+  assign core_rlast = io_master_rlast;
+  assign core_rid = io_master_rid;
+`endif
 
   Core #(
     .RESET_PC(RESET_PC)
@@ -281,6 +290,7 @@ module NPC #(
     .axi_rid(core_rid)
   );
 
+`ifdef NPC_LOCAL_AXI
   LocalAxiSlave u_local_axi (
     .clock(clock),
     .reset(reset || (LOCAL_AXI == 0)),
@@ -314,5 +324,6 @@ module NPC #(
     .axi_rlast(local_rlast),
     .axi_rid(local_rid)
   );
+`endif
 
 endmodule

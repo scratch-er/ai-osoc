@@ -674,14 +674,14 @@ Sessions:
    - Added `RESET_PC` Verilator parameter support in the NPC Makefile and `--uart-expect TEXT` in the simulator so spec mode can run larger AM images at `0x80000000` and stop after expected UART output.
    - Validation completed on Linux: `NPC_DEBUG=0 spec-smoke` printed `SPEC` and `NPC_SPEC_RESULT status=good reason=uart_eot cycles=61`; `hello` in spec mode printed `Hello, AbstractMachine!` and stopped at `NPC_SPEC_RESULT status=good reason=uart_expect cycles=1217`; RT-Thread in spec mode reached `msh />` and stopped at `NPC_SPEC_RESULT status=good reason=uart_expect cycles=302371`; default debug-mode smoke/selected DiffTest checks still passed.
 
-2. **P8-S2: Analyze baseline PPA/performance and perform targeted optimization**
-   - Run Linux tool smoke for `yosys` and `iEDA`.
-   - Run synthesis/timing baseline in `NPC_DEBUG=0` spec mode with `yosys-sta`.
-   - Run performance baseline in `NPC_DEBUG=1` debug mode using existing stable lines (`NPC_RESULT`, `NPC_ICACHE`, and `NEMU_RESULT` where available).
-   - Baseline workloads: `hello`, selected `cpu-tests` (`sum`, `string`, `crc32`, `quick-sort`, `matrix-mul`), `coremark`, and `rt-thread-am`.
-   - Record commands/results in a new dedicated note `notes/p8-timing-and-ppa.md`.
-   - Choose and implement one small measured optimization based on timing/PPA or performance evidence. Candidate areas include removing residual debug fanout from spec mode, simplifying a critical datapath/control path, or a tightly justified icache/PPA cleanup. Do not start pipeline refactoring.
-   - Validate before/after with spec-mode synthesis smoke, debug-mode directed regression, and the workload subset that motivated the optimization.
+2. **P8-S2: Analyze baseline PPA/performance and perform targeted optimization** — done.
+   - Ran Linux Yosys/iEDA physical synthesis and STA against the SoC-connectable `NPC_DEBUG=0` top, excluding Verilator-only `LocalAxiSlave.v`/`MemIf.v` from the PPA RTL list.
+   - Recorded the reproducible flow and results in `notes/p8-timing-and-ppa.md`.
+   - Baseline at 100 MHz: area `22867.040000`, worst core max path `1.619 ns`, slack `8.334 ns`, reported Fmax `600.118 MHz`, iEDA total power estimate `3.65956 W`.
+   - Performance baseline covered `hello`, selected `cpu-tests` (`sum`, `string`, `crc32`, `quick-sort`, `matrix-mul`), bounded default `coremark`, and `rt-thread-am` using debug/DiffTest output lines.
+   - Implemented a measured spec-mode cleanup: `NPC_LOCAL_AXI` gates the Verilator-only local AXI slave, and `NPC_DEBUG=0` no longer preserves hidden debug/commit fanout through an `unused_debug` reduction.
+   - Optimized result at 100 MHz: area `22755.600000` (-0.49%), worst core max path `1.799 ns`, slack `8.149 ns`, reported Fmax `540.333 MHz`, iEDA total power estimate `2.9042 W`.
+   - Validation after optimization passed: `NPC_DEBUG=0 spec-smoke`, optimized physical synthesis/STA, and the debug-mode directed/DiffTest regression through access-fault tests.
 
 3. **P8-S3: Closing P8**
    - Run final debug-mode practical regression after the last RTL change.
