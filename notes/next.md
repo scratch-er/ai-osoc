@@ -12,7 +12,7 @@ Current state:
   - `84d258d Validate physical CLINT workloads`
 - Phase 7 (`Instruction Cache and fence.i`) is complete through `P7-S3: Linux migration, final exit check, and Phase 8 preparation`.
 - Phase 8 (`Linux PPA, Optimization, and Spec-Interface Readiness`) is complete through `P8-S3: Closing P8` (validated on Linux; not yet committed — ask the user before any git commit).
-- **Phase 9 was re-planned per user request:** connecting to ysyxSoC (deferred since Phase 5) is now the new `Phase 9: ysyxSoC Integration and AXI Validation` in `notes/plan.md`; the optional pipeline phase became Phase 10 and final integration became Phase 11. The next session starts with `P9-S1: ysyxSoC elaboration bring-up`; see the Phase 9 facts section below.
+- **Phase 9 was re-planned per user request:** connecting to ysyxSoC (deferred since Phase 5) is now the new `Phase 9: ysyxSoC Integration and AXI Validation` in `notes/plan.md`; the optional pipeline phase became Phase 10 and final integration became Phase 11. `P9-S1: ysyxSoC elaboration bring-up` is complete on the macOS host (see the P9-S1 section below). Next session: `P9-S2: SoC Verilator harness and MROM/UART smoke`.
 - Do not modify `AGENTS.md` — it is project-supplied and owned by the user. Record project conventions (such as the `ysyxSoC.patch` workflow) in `notes/` only; the user explicitly reverted an `AGENTS.md` edit for this.
 - The project must remain portable across macOS and Linux. At the start of each future session, detect the current platform and choose commands/toolchain settings from the matching platform note; do not assume either macOS or Linux globally.
 - Platform notes were split out:
@@ -657,14 +657,61 @@ Notes updated:
 - `notes/p8-timing-and-ppa.md` now contains the P8-S3 final timing cleanup, final sweep table, before/after comparison, validation, and remaining caveats.
 - `notes/plan.md` marks `P8-S3: Closing P8` complete and records final STA/validation details.
 
+## Phase 9 Session 1 status
+
+`P9-S1: ysyxSoC elaboration bring-up` is complete on the macOS host (macOS 26.5.2, Darwin 25.5.0 arm64). `ysyxSoC/build/ysyxSoCFull.v` is now reproducibly generated. Do not commit until the user finishes revising.
+
+Environment used:
+
+- Homebrew OpenJDK `17.0.19`; the `ysyxSoC/mill` wrapper reads `.mill-version` (`0.12.4`) and downloads Mill 0.12.4 on first run. `./mill --version` confirms Mill 0.12.4 / Java 17.0.19.
+- First `./mill` invocation also resolves all ivy dependencies; subsequent runs are fast.
+
+Exact commands and results:
+
+1. Submodule init and rocket-chip patch (~2.5 min, network required):
+
+```sh
+make -C ysyxSoC dev-init
+```
+
+Cloned `rocket-chip` at `d0c6b50` plus nested deps (`cde`, `chisel`, `diplomacy`, `hardfloat`, `berkeley-softfloat-3`, `berkeley-testfloat-3`), then applied `patch/rocket-chip.patch` inside `rocket-chip`. Result: exit 0.
+
+2. Elaboration (31s; the plain mill command works — no firtool patch needed, the Chisel-bundled firtool is sufficient):
+
+```sh
+cd ysyxSoC && ./mill -i ysyxsoc.runMain ysyx.Elaborate --target-dir build
+```
+
+Result: `ysyxSoC/build/ysyxSoCTop.sv` (5444 lines), exit 0. Only deprecation warnings from rocket-chip/Scala.
+
+3. Post-processing per `ysyxSoC/Makefile`, adapted for macOS BSD sed (GNU `sed -i -e` and BRE `\|`/empty alternation do not work with BSD sed):
+
+```sh
+cd ysyxSoC
+mv build/ysyxSoCTop.sv build/ysyxSoCFull.v
+sed -i '' -E 's/_(aw|ar|w|r|b)_(bits_)?/_\1/g' build/ysyxSoCFull.v
+sed -i '' '/firrtl_black_box_resource_files.f/, $d' build/ysyxSoCFull.v
+```
+
+(On Linux, the original Makefile lines work as-is: `sed -i -e 's/_\(aw\|ar\|w\|r\|b\)_\(\|bits_\)/_\1/g'`.)
+
+Verified contents of `ysyxSoC/build/ysyxSoCFull.v`:
+
+- `ysyx_00000000 cpu` instance (line ~1475) with `io_master_*` AXI4 ports and `io_slave_*` tied inactive by the SoC itself; port names match `specs/core.md` after the sed rename.
+- Full fabric present: `AXI4Xbar` x2, `AXI4Fragmenter`, `AXI4ToAPB`, `APBFanout`, `APBUart16550`, `AXI4MROM` (writes trigger `$fatal`), `AXI4RAM` with `mem_2048x32` (8KB SRAM), plus APB SPI/GPIO/Keyboard/VGA and PSRAM/SDRAM stubs, and tops `ysyxSoCASIC` / `ysyxSoCFull` / `ysyxSoCTop`.
+- `MROMHelper` module at the end imports `DPI-C function void mrom_read(input int raddr, output int rdata)` — the harness must provide `mrom_read()`.
+- Submodule state after dev-init: `git -C ysyxSoC status --short` shows ` m rocket-chip` (expected — `rocket-chip.patch` applied inside the nested submodule, no commit) and untracked `mill`; `build/` and `out/` are gitignored. Nothing was committed inside the submodule.
+
 ## Next steps
 
-1. Start **Phase 9: ysyxSoC Integration and AXI Validation** (newly inserted into `notes/plan.md`; the old pipeline phase is now Phase 10, final integration is Phase 11). Entry point: `P9-S1: ysyxSoC elaboration bring-up` — run `make -C ysyxSoC dev-init`, then `cd ysyxSoC && ./mill -i ysyxsoc.runMain ysyx.Elaborate --target-dir build`, then post-process per `ysyxSoC/Makefile` (rename `build/ysyxSoCTop.sv` to `build/ysyxSoCFull.v` plus the two `sed` cleanups). Scope is minimal AXI validation only: MROM fetch, SRAM load/store, UART16550 output; no PSRAM/SDRAM/flash XIP/SPI/GPIO/PS2/VGA/NVBoard/ChipLink.
-2. Never commit inside the `ysyxSoC` submodule; keep tracked-source debug changes as `ysyxSoC.patch` at the repo root (regenerate: `git -C ysyxSoC diff > ../ysyxSoC.patch`; apply on fresh checkouts: `git -C ysyxSoC apply ../ysyxSoC.patch`).
-3. If the user wants to persist the P8 closeout or this planning state, ask before making a git commit.
+1. Start `P9-S2: SoC Verilator harness and MROM/UART smoke` (session 2 of Phase 9 in `notes/plan.md`): add a SoC build flavor to the NPC flow (output under `npc/build/soc/`), compile all `ysyxSoC/perip/**/*.v` with include dirs `perip/uart16550/rtl` + `perip/spi/rtl`, flags `--timescale "1ns/1ns" --no-timing`, the post-processed `ysyxSoCFull.v` copied into our own build dir with `ysyx_00000000` renamed to `NPC`, and the physical NPC RTL in `NPC_DEBUG=0` spec-port mode (no `NPC_LOCAL_AXI`). Add `mrom_read()` (image at `0x20000000`) and an `assert(0)` `flash_read()` DPI stub, plus `Verilated::commandArgs(argc, argv)`. Zero-patch smoke: tiny MROM program storing a marker char to UART16550, terminated by cycle limit, pass/fail from structured output + RTL-printed UART bytes.
+2. Never commit inside the `ysyxSoC` submodule; keep tracked-source debug changes as `ysyxSoC.patch` at the repo root (regenerate: `git -C ysyxSoC diff > ../ysyxSoC.patch`; apply on fresh checkouts: `git -C ysyxSoC apply ../ysyxSoC.patch`). Note this diff does not cover the nested `rocket-chip` patch — that one is re-applied by `make -C ysyxSoC dev-init` on fresh clones.
+3. If the user wants to persist the P8 closeout or the P9-S1 state, ask before making a git commit. P9-S1 produces no tracked changes outside `notes/` (generated files live in gitignored `ysyxSoC/build/` and `ysyxSoC/out/`), so a P9-S1 commit would cover notes only.
 4. Keep the STA caveat in mind: current timing is standalone core-top STA with only a core clock constraint; no SoC AXI input/output delays are modeled yet.
 
 ## Phase 9 planning facts (verified on the macOS host; re-verify on Linux)
+
+P9-S1 confirmed the elaboration-related facts below on macOS: `dev-init`, the plain mill elaborate command (no firtool patch needed), gitignored `build/`, and the `ysyx_00000000 cpu` instance all behave as recorded.
 
 - Java 17.0.19 (Homebrew) and network access are available; `ysyxSoC/mill` wrapper exists (untracked in the submodule); `.mill-version` = 0.12.4. Mill loads `build.sc` but fails until `rocket-chip` is initialized: `make dev-init` runs `git submodule update --init --recursive` and then applies `patch/rocket-chip.patch` inside `rocket-chip`.
 - `make verilog` additionally runs `patch/update-firtool.sh` (downloads firtool 1.105.0) and may not work; use the user-provided mill command above instead.

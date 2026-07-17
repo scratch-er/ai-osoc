@@ -734,11 +734,12 @@ Scope decisions:
 
 Sessions:
 
-1. **P9-S1: ysyxSoC elaboration bring-up**
+1. **P9-S1: ysyxSoC elaboration bring-up** — completed
    - Run `make -C ysyxSoC dev-init` (submodule plus `patch/rocket-chip.patch`) and elaborate with `cd ysyxSoC && ./mill -i ysyxsoc.runMain ysyx.Elaborate --target-dir build`.
    - Post-process per `ysyxSoC/Makefile` (rename to `build/ysyxSoCFull.v`, apply the two `sed` cleanups).
    - Verify the generated Verilog contains the MROM/SRAM/UART16550/APB fabric and the `ysyx_00000000` CPU instance, and record exact commands, Java/mill versions, and platform quirks in `notes/next.md`.
    - Exit when `ysyxSoC/build/ysyxSoCFull.v` is reproducibly generated; if elaboration fails irrecoverably, record the precise blocker instead of falling back to the MROM-less D-stage file.
+   - Exit status: P9-S1 is complete on macOS; `dev-init` + plain mill elaboration + macOS-adapted sed post-processing produced a verified `ysyxSoC/build/ysyxSoCFull.v` (MROM/SRAM/UART16550/APB fabric and `ysyx_00000000 cpu` instance confirmed). Exact commands and BSD-sed adaptations are in `notes/next.md`.
 
 2. **P9-S2: SoC Verilator harness and MROM/UART smoke**
    - Add a SoC build flavor to the NPC flow (reuse `npc/csrc` with a SoC compile-time path, output under `npc/build/soc/`), compiling: all `ysyxSoC/perip/**/*.v`, include dirs `perip/uart16550/rtl` and `perip/spi/rtl`, Verilator flags `--timescale "1ns/1ns" --no-timing`, the elaborated `ysyxSoCFull.v` copied into our build dir with `ysyx_00000000` renamed to `NPC`, and the physical NPC RTL in `NPC_DEBUG=0` spec-port mode (no `NPC_LOCAL_AXI`).
