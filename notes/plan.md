@@ -701,7 +701,84 @@ Exit criteria:
 - `notes/p8-timing-and-ppa.md` explains the flow well enough to repeat after future pipeline refactoring.
 - At least `hello`, representative `cpu-tests`, `coremark`, and `rt-thread-am` have recorded status.
 
-## Phase 9: Optional Pipeline and Targeted Optimizations
+## Phase 9: ysyxSoC Integration and AXI Validation
+
+Goal: connect the NPC core to the ysyxSoC simulation environment and validate that the core correctly fetches instructions and performs load/store data accesses through the SoC AXI fabric. This closes the ysyxSoC connection that Phase 5 deliberately deferred. Scope is deliberately minimal: only the work required to test the AXI master interface — MROM instruction fetch, SRAM load/store, and UART16550 output for observability. PSRAM/SDRAM behavior models, flash XIP boot, SPI, GPIO/PS2/VGA, NVBoard, and ChipLink are out of scope.
+
+Relevant lecture guidance:
+
+- B2 (`specs/lecture-notes/03_B阶段讲义/02_B2.md`): ysyxSoC address map, the numbered connection steps, MROM/SRAM/UART16550 usage, `riscv32e-ysyxsoc` AM runtime, and DiffTest restoration with MROM/SRAM in NEMU.
+- D6 (`specs/lecture-notes/05_D阶段讲义/06_D6.md`): CPU interface connection, UART16550 initialization/polling, `hello` bring-up.
+- `ysyxSoC/spec/cpu-interface.md`: exact top-level port naming; already matched by `npc/rtl/NPC.v` (verified during planning).
+- `specs/core.md`: top-level port tables, built-in CLINT (ysyxSoC has no CLINT; the core keeps its internal one), reset address `0x20000000` = MROM base.
+
+Environment facts established during planning (macOS host):
+
+- Java 17.0.19 and network access are available; `ysyxSoC/mill` wrapper exists (untracked) and `.mill-version` is 0.12.4.
+- The ysyxSoC submodule is at `df38a4d9`, clean except the untracked `mill` wrapper; the `rocket-chip` submodule is uninitialized. `make dev-init` runs `git submodule update --init --recursive` and applies `patch/rocket-chip.patch` inside `rocket-chip`.
+- `make verilog` may not work (it first runs `patch/update-firtool.sh`, which downloads a specific firtool). Use the user-provided command `./mill -i ysyxsoc.runMain ysyx.Elaborate --target-dir build`, then apply the same post-processing as `ysyxSoC/Makefile`: rename `build/ysyxSoCTop.sv` to `build/ysyxSoCFull.v` and run the two `sed` cleanups.
+- `ysyxSoC/build/` is gitignored, so elaboration artifacts do not dirty the submodule.
+- The generated SoC instantiates `ysyx_00000000 cpu (...)`; rename this module to `NPC` on a copy kept under our own build directory.
+- `AXI4MROM` supports only single-beat reads, but the SoC inserts `AXI4Fragmenter` upstream of `xbar2` (MROM/SRAM/APB), so the icache's 16-byte INCR burst refill works unchanged. Writes to MROM trigger a fatal assertion in simulation; tests must never store to the MROM window.
+- `perip/psram/psram.v` and `perip/sdram/sdram.v` are unimplemented stubs (buses tied to `z`); the `0x80000000` PSRAM and `0xa0000000` SDRAM windows must never be accessed.
+- UART16550 prints characters via `$write` in `perip/uart16550/rtl/uart_tfifo.v`; without divisor initialization at most 16 characters are emitted, so AM `putch()` must initialize the divisor and poll LSR THRE.
+- `ready-to-run/D-stage/ysyxSoCFull.v` has no MROM (D-stage boots from flash) and is not a valid fallback for our `0x20000000` reset PC.
+- In the SoC simulation, UART output is printed by RTL `$write` straight to the simulator stdout; without debug ports the harness cannot observe retired `ebreak` or UART bytes, so precise termination and DiffTest require exposing the core's commit/debug signals at the SoC top level.
+
+Scope decisions:
+
+- Only validate the AXI master path: MROM instruction fetch (including icache burst refill), SRAM load/store (byte/halfword/word, `wstrb`, narrow transfers), and UART16550 MMIO stores for output. Do not implement PSRAM/SDRAM models, flash XIP, SPI, GPIO, PS/2, VGA, NVBoard, or ChipLink.
+- Never commit inside the `ysyxSoC` submodule. Debug-signal changes to tracked ysyxSoC sources are kept as `ysyxSoC.patch` at the repository root (regenerate with `git -C ysyxSoC diff > ../ysyxSoC.patch`; fresh checkouts apply it with `git -C ysyxSoC apply ../ysyxSoC.patch`).
+- Keep the existing local-AXI NPC flows (debug and spec modes) working; the SoC simulation is an additional build flavor, not a replacement.
+- Reuse the existing harness philosophy: one command per experiment, structured result lines, cycle limits, concise output.
+
+Sessions:
+
+1. **P9-S1: ysyxSoC elaboration bring-up**
+   - Run `make -C ysyxSoC dev-init` (submodule plus `patch/rocket-chip.patch`) and elaborate with `cd ysyxSoC && ./mill -i ysyxsoc.runMain ysyx.Elaborate --target-dir build`.
+   - Post-process per `ysyxSoC/Makefile` (rename to `build/ysyxSoCFull.v`, apply the two `sed` cleanups).
+   - Verify the generated Verilog contains the MROM/SRAM/UART16550/APB fabric and the `ysyx_00000000` CPU instance, and record exact commands, Java/mill versions, and platform quirks in `notes/next.md`.
+   - Exit when `ysyxSoC/build/ysyxSoCFull.v` is reproducibly generated; if elaboration fails irrecoverably, record the precise blocker instead of falling back to the MROM-less D-stage file.
+
+2. **P9-S2: SoC Verilator harness and MROM/UART smoke**
+   - Add a SoC build flavor to the NPC flow (reuse `npc/csrc` with a SoC compile-time path, output under `npc/build/soc/`), compiling: all `ysyxSoC/perip/**/*.v`, include dirs `perip/uart16550/rtl` and `perip/spi/rtl`, Verilator flags `--timescale "1ns/1ns" --no-timing`, the elaborated `ysyxSoCFull.v` copied into our build dir with `ysyx_00000000` renamed to `NPC`, and the physical NPC RTL in `NPC_DEBUG=0` spec-port mode (no `NPC_LOCAL_AXI`).
+   - The simulation top module is the generated SoC top; add `mrom_read()` (harness image loaded at `0x20000000`) and an `assert(0)` `flash_read()` DPI stub, plus `Verilated::commandArgs(argc, argv)`.
+   - Zero-patch smoke tests, terminated by cycle limit with pass/fail from structured harness output and the RTL-printed UART bytes: a tiny MROM program that stores a marker character to UART16550 (validates both fetch and store paths in one go).
+   - Exit when the smoke passes with one command.
+
+3. **P9-S3: Debug/commit exposure patch and DiffTest restoration**
+   - Create `ysyxSoC.patch`: route the NPC `NPC_DEBUG=1` debug/commit observation signals (and `io_reset_pc`) through `src/CPU.scala`, `src/SoC.scala`, and `src/Top.scala` up to the SoC top-level ports; rebuild the SoC flavor with `NPC_DEBUG=1`.
+   - Restore precise harness termination on retired `ebreak` and structured `NPC_RESULT` lines in the SoC sim.
+   - Restore event DiffTest: add MROM (`0x20000000..0x20000fff`) and SRAM (`0x0f000000..0x0f001fff`) regions to NEMU, sync the MROM image into the REF at init, and verify the NPC-device UART window covers UART16550 register accesses (including LSR reads) for MMIO replay.
+   - Document the patch apply/regenerate commands.
+   - Exit when the P9-S2 smoke plus a small multi-line program (exercising icache burst refill) pass with precise termination and DiffTest enabled.
+
+4. **P9-S4: SRAM load/store validation (mem-test style)**
+   - Add a generated mem-test program (same style as existing `npc/tests/make-*.py` generators) running from MROM with its stack in SRAM: fill and verify the 8KB SRAM window with byte/halfword/word stores and loads, print a short PASS/FAIL marker through UART16550, and terminate via `ebreak`.
+   - Cover `wstrb` behavior, narrow transfers, and repeated read-after-write patterns; run with DiffTest.
+   - Exit when the mem-test passes on the SoC sim and the existing directed NPC regressions still pass.
+
+5. **P9-S5: AM `riscv32e-ysyxsoc` runtime and `hello`/`dummy` on SoC**
+   - Add a minimal AM platform: linker script (text/rodata in MROM, data/stack/heap in SRAM), startup, `putch()` with UART16550 divisor init and LSR THRE polling, `halt()` via `ebreak`, and a one-command run path.
+   - Run `cpu-tests/dummy` and `hello` on the SoC sim with DiffTest.
+   - Stretch (not required for phase exit): data-segment bootloader (VMA/LMA copy) enabling cpu-tests with writable globals.
+   - Exit when `dummy` and `hello` pass with correct UART output.
+
+6. **P9-S6: Phase 9 regression and closeout**
+   - Re-run the full existing regression (NPC directed tests, 35 cpu-tests with DiffTest, `hello`, CTE smokes, RT-Thread smoke) to prove the SoC work did not regress local flows.
+   - Record exact SoC commands/results, known limitations (PSRAM/SDRAM stub windows, no flash XIP, no GPIO/PS2/VGA), and the patch workflow in `notes/next.md`; update `npc/README.md` for the new build flavor.
+   - Exit when a new session can reproduce the SoC integration from notes alone.
+
+Exit criteria:
+
+- ysyxSoC elaborates reproducibly from source with documented commands, and the generated SoC with the renamed NPC instance simulates under Verilator.
+- The core fetches instructions from MROM at `0x20000000` through the SoC AXI fabric, including 16-byte icache burst refills.
+- Stores to UART16550 MMIO produce visible output, and byte/halfword/word loads/stores to the 8KB SRAM verify correctly under a mem-test.
+- `ysyxSoC.patch` at the repo root exposes commit/debug signals for precise `ebreak` termination and DiffTest; no changes are committed inside the ysyxSoC submodule.
+- AM `riscv32e-ysyxsoc` runs `dummy` and `hello` on the SoC sim.
+- All pre-existing NPC/NEMU regressions still pass.
+
+## Phase 10: Optional Pipeline and Targeted Optimizations
 
 Goal: improve performance only after the non-pipelined/bus/cache design is correct and measured.
 
@@ -727,7 +804,7 @@ Exit criteria:
 - Pipelined version passes the same functional suite as baseline.
 - Performance gain is measured and justified against area/frequency cost.
 
-## Phase 10: Final Integration and Documentation
+## Phase 11: Final Integration and Documentation
 
 Goal: make the project maintainable for future sessions and review.
 

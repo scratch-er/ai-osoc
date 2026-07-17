@@ -11,6 +11,9 @@ Current state:
   - `8170098 Implement physical CLINT`
   - `84d258d Validate physical CLINT workloads`
 - Phase 7 (`Instruction Cache and fence.i`) is complete through `P7-S3: Linux migration, final exit check, and Phase 8 preparation`.
+- Phase 8 (`Linux PPA, Optimization, and Spec-Interface Readiness`) is complete through `P8-S3: Closing P8` (validated on Linux; not yet committed — ask the user before any git commit).
+- **Phase 9 was re-planned per user request:** connecting to ysyxSoC (deferred since Phase 5) is now the new `Phase 9: ysyxSoC Integration and AXI Validation` in `notes/plan.md`; the optional pipeline phase became Phase 10 and final integration became Phase 11. The next session starts with `P9-S1: ysyxSoC elaboration bring-up`; see the Phase 9 facts section below.
+- Do not modify `AGENTS.md` — it is project-supplied and owned by the user. Record project conventions (such as the `ysyxSoC.patch` workflow) in `notes/` only; the user explicitly reverted an `AGENTS.md` edit for this.
 - The project must remain portable across macOS and Linux. At the start of each future session, detect the current platform and choose commands/toolchain settings from the matching platform note; do not assume either macOS or Linux globally.
 - Platform notes were split out:
   - `notes/platform-macos.md`: macOS paths/toolchain/workarounds from the previous host.
@@ -656,6 +659,20 @@ Notes updated:
 
 ## Next steps
 
-1. If the user wants to persist the closeout, ask before making a git commit.
-2. Start Phase 9 only if requested: decide whether to pipeline based on current counters and P8 timing/PPA results.
-3. Keep the STA caveat in mind: current timing is standalone core-top STA with only a core clock constraint; no SoC AXI input/output delays are modeled yet.
+1. Start **Phase 9: ysyxSoC Integration and AXI Validation** (newly inserted into `notes/plan.md`; the old pipeline phase is now Phase 10, final integration is Phase 11). Entry point: `P9-S1: ysyxSoC elaboration bring-up` — run `make -C ysyxSoC dev-init`, then `cd ysyxSoC && ./mill -i ysyxsoc.runMain ysyx.Elaborate --target-dir build`, then post-process per `ysyxSoC/Makefile` (rename `build/ysyxSoCTop.sv` to `build/ysyxSoCFull.v` plus the two `sed` cleanups). Scope is minimal AXI validation only: MROM fetch, SRAM load/store, UART16550 output; no PSRAM/SDRAM/flash XIP/SPI/GPIO/PS2/VGA/NVBoard/ChipLink.
+2. Never commit inside the `ysyxSoC` submodule; keep tracked-source debug changes as `ysyxSoC.patch` at the repo root (regenerate: `git -C ysyxSoC diff > ../ysyxSoC.patch`; apply on fresh checkouts: `git -C ysyxSoC apply ../ysyxSoC.patch`).
+3. If the user wants to persist the P8 closeout or this planning state, ask before making a git commit.
+4. Keep the STA caveat in mind: current timing is standalone core-top STA with only a core clock constraint; no SoC AXI input/output delays are modeled yet.
+
+## Phase 9 planning facts (verified on the macOS host; re-verify on Linux)
+
+- Java 17.0.19 (Homebrew) and network access are available; `ysyxSoC/mill` wrapper exists (untracked in the submodule); `.mill-version` = 0.12.4. Mill loads `build.sc` but fails until `rocket-chip` is initialized: `make dev-init` runs `git submodule update --init --recursive` and then applies `patch/rocket-chip.patch` inside `rocket-chip`.
+- `make verilog` additionally runs `patch/update-firtool.sh` (downloads firtool 1.105.0) and may not work; use the user-provided mill command above instead.
+- `ysyxSoC/build/` is gitignored, so elaboration artifacts do not dirty the submodule.
+- The generated SoC instantiates `ysyx_00000000 cpu (...)`; rename the module to `NPC` on a copy under our own build directory. `npc/rtl/NPC.v` ports already match `ysyxSoC/spec/cpu-interface.md` exactly; default `RESET_PC` is `0x20000000` (MROM base).
+- Address map for this phase: MROM `0x20000000..0x20000fff` (AXI4MROM, DPI `mrom_read`, single-beat reads only, writes trigger a fatal assertion), SRAM `0x0f000000..0x0f001fff` (8KB AXI4RAM), UART16550 `0x10000000` (chars printed by `$write` in `perip/uart16550/rtl/uart_tfifo.v`; more than 16 chars needs divisor init + LSR THRE polling), flash XIP `0x30000000` (unused; `FAST_FLASH` is undefined by default), PSRAM `0x80000000` and SDRAM `0xa0000000` are unimplemented stubs (buses tied to `z`) — never access those windows.
+- `AXI4Fragmenter` sits upstream of the MROM/SRAM xbar, so the icache's 16-byte INCR burst refill works unchanged against the single-beat MROM/SRAM slaves.
+- Verilator SoC build needs: all `ysyxSoC/perip/**/*.v`, include dirs `perip/uart16550/rtl` + `perip/spi/rtl`, flags `--timescale "1ns/1ns" --no-timing`, C++ DPI `mrom_read()` + `flash_read()` (assert stub), and `Verilated::commandArgs(argc, argv)` before the sim loop.
+- `ready-to-run/D-stage/ysyxSoCFull.v` has no MROM (D-stage boots from flash) — not a fallback for our `0x20000000` reset PC.
+- Without debug ports the SoC harness cannot see retired `ebreak` or UART bytes (RTL `$write` goes straight to sim stdout): P9-S2 smokes terminate by cycle limit and check stdout; P9-S3 adds the debug/commit exposure patch (`ysyxSoC.patch`) for precise termination and DiffTest.
+- NEMU DiffTest restoration needs MROM + SRAM regions (the P5-S1 region table) and MROM image sync to REF; the P5-S2 NPC-UART replay window at `0x10000000` must be checked to cover UART16550 register accesses (including LSR reads).
