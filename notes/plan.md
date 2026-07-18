@@ -741,11 +741,12 @@ Sessions:
    - Exit when `ysyxSoC/build/ysyxSoCFull.v` is reproducibly generated; if elaboration fails irrecoverably, record the precise blocker instead of falling back to the MROM-less D-stage file.
    - Exit status: P9-S1 is complete on macOS; `dev-init` + plain mill elaboration + macOS-adapted sed post-processing produced a verified `ysyxSoC/build/ysyxSoCFull.v` (MROM/SRAM/UART16550/APB fabric and `ysyx_00000000 cpu` instance confirmed). Exact commands and BSD-sed adaptations are in `notes/next.md`.
 
-2. **P9-S2: SoC Verilator harness and MROM/UART smoke**
+2. **P9-S2: SoC Verilator harness and MROM/UART smoke** — completed
    - Add a SoC build flavor to the NPC flow (reuse `npc/csrc` with a SoC compile-time path, output under `npc/build/soc/`), compiling: all `ysyxSoC/perip/**/*.v`, include dirs `perip/uart16550/rtl` and `perip/spi/rtl`, Verilator flags `--timescale "1ns/1ns" --no-timing`, the elaborated `ysyxSoCFull.v` copied into our build dir with `ysyx_00000000` renamed to `NPC`, and the physical NPC RTL in `NPC_DEBUG=0` spec-port mode (no `NPC_LOCAL_AXI`).
    - The simulation top module is the generated SoC top; add `mrom_read()` (harness image loaded at `0x20000000`) and an `assert(0)` `flash_read()` DPI stub, plus `Verilated::commandArgs(argc, argv)`.
    - Zero-patch smoke tests, terminated by cycle limit with pass/fail from structured harness output and the RTL-printed UART bytes: a tiny MROM program that stores a marker character to UART16550 (validates both fetch and store paths in one go).
    - Exit when the smoke passes with one command.
+   - Exit status: complete on macOS. `make -C npc soc-smoke` builds `npc/build/soc/npc-soc` (sim top `ysyxSoCTop`, harness `npc/csrc/soc_main.cpp`) and passes: the MROM program `npc/tests/make-soc-uart-bin.py` prints `SOC` through the UART16550. Key bring-up bug: ysyxSoC delays the CPU reset through a 10-stage `SynchronizerShiftReg` (`ysyxSoC/src/SoC.scala:62`), so the harness must hold reset >= 10 cycles (it uses 20); a 2-cycle reset re-appears as a spurious mid-run reset pulse that desyncs the AXI burst and deadlocks the fabric. Existing debug-mode and spec-mode regressions re-verified clean. Details in `notes/next.md`.
 
 3. **P9-S3: Debug/commit exposure patch and DiffTest restoration**
    - Create `ysyxSoC.patch`: route the NPC `NPC_DEBUG=1` debug/commit observation signals (and `io_reset_pc`) through `src/CPU.scala`, `src/SoC.scala`, and `src/Top.scala` up to the SoC top-level ports; rebuild the SoC flavor with `NPC_DEBUG=1`.

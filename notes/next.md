@@ -12,7 +12,7 @@ Current state:
   - `84d258d Validate physical CLINT workloads`
 - Phase 7 (`Instruction Cache and fence.i`) is complete through `P7-S3: Linux migration, final exit check, and Phase 8 preparation`.
 - Phase 8 (`Linux PPA, Optimization, and Spec-Interface Readiness`) is complete through `P8-S3: Closing P8` (validated on Linux; not yet committed — ask the user before any git commit).
-- **Phase 9 was re-planned per user request:** connecting to ysyxSoC (deferred since Phase 5) is now the new `Phase 9: ysyxSoC Integration and AXI Validation` in `notes/plan.md`; the optional pipeline phase became Phase 10 and final integration became Phase 11. `P9-S1: ysyxSoC elaboration bring-up` is complete on the macOS host (see the P9-S1 section below). Next session: `P9-S2: SoC Verilator harness and MROM/UART smoke`.
+- **Phase 9 was re-planned per user request:** connecting to ysyxSoC (deferred since Phase 5) is now the new `Phase 9: ysyxSoC Integration and AXI Validation` in `notes/plan.md`; the optional pipeline phase became Phase 10 and final integration became Phase 11. `P9-S1: ysyxSoC elaboration bring-up` and `P9-S2: SoC Verilator harness and MROM/UART smoke` are complete on the macOS host (see the P9-S1/P9-S2 sections below). Next session: `P9-S3: Debug/commit exposure patch and DiffTest restoration`.
 - Do not modify `AGENTS.md` — it is project-supplied and owned by the user. Record project conventions (such as the `ysyxSoC.patch` workflow) in `notes/` only; the user explicitly reverted an `AGENTS.md` edit for this.
 - The project must remain portable across macOS and Linux. At the start of each future session, detect the current platform and choose commands/toolchain settings from the matching platform note; do not assume either macOS or Linux globally.
 - Platform notes were split out:
@@ -702,11 +702,36 @@ Verified contents of `ysyxSoC/build/ysyxSoCFull.v`:
 - `MROMHelper` module at the end imports `DPI-C function void mrom_read(input int raddr, output int rdata)` — the harness must provide `mrom_read()`.
 - Submodule state after dev-init: `git -C ysyxSoC status --short` shows ` m rocket-chip` (expected — `rocket-chip.patch` applied inside the nested submodule, no commit) and untracked `mill`; `build/` and `out/` are gitignored. Nothing was committed inside the submodule.
 
+## Phase 9 Session 2 status
+
+`P9-S2: SoC Verilator harness and MROM/UART smoke` is complete on the macOS host. `make -C npc soc-smoke` passes with one command (exit 0).
+
+What was added:
+
+- `npc/Makefile` SoC flavor: `make -C npc soc` builds `npc/build/soc/npc-soc`; `soc-smoke` runs the smoke and greps the results. The build copies `ysyxSoC/build/ysyxSoCFull.v` to `npc/build/soc/ysyxSoCFull.v` with `sed 's/ysyx_00000000/NPC/g'`, compiles all `ysyxSoC/perip/**/*.v` (include dirs `perip/uart16550/rtl` + `perip/spi/rtl`), the NPC RTL in `NPC_DEBUG=0` spec-port mode **excluding `rtl/bus/LocalAxiSlave.v` and `rtl/bus/MemIf.v`** (local-AXI-only, DPI-bound), and `npc/csrc/soc_main.cpp`. Verilator flags: `--top-module ysyxSoCTop --timescale "1ns/1ns" --no-timing -Wno-fatal --autoflush`; `TRACE=1` adds `--trace` (harness `--wave` writes `build/soc/wave.vcd`). `--autoflush` makes Verilator emit `VL_FFLUSH_MT()` after every `$write`/`$display` (verified in the generated C++ next to the `uart_tfifo.v` `$write("%c", ...)`), so single UART chars appear immediately even if the sim is killed or hits an RTL `$fatal` before exit; per the Verilator spec, the alternative is calling `fflush(stdout)` in the C++ loop.
+- `npc/csrc/soc_main.cpp`: standalone harness. `mrom_read()` DPI serves a 4KB MROM image loaded at `0x20000000` (`--image`); offset is `raddr & 0xfff` (AXI4MROM passes the full address with the top 2 bits stripped). `flash_read()` is an `assert(0)` stub (only reachable after SPI flash commands, which we never issue). Result line: `NPC_SOC_RESULT status=... reason=... cycles=... limit=... mrom_reads=...`.
+- `npc/tests/make-soc-uart-bin.py`: MROM program writing `SOC\n` to UART16550 THR (`0x10000000`) then `jal x0, 0`. No divisor init needed for <= 16 chars.
+- `npc/rtl/bus/AxiMaster.v`: `$display` AXI channel probes guarded by `` `ifdef NPC_TRACE_AXI`` (inert by default; invaluable for SoC AXI debugging — VCD signal aliasing in the generated SoC makes waveform forensics painful).
+
+Key bring-up bug (cost most of the session): **ysyxSoC delays the CPU reset through a 10-stage `SynchronizerShiftReg` (`ysyxSoC/src/SoC.scala:62`: `cpu.module.reset := SynchronizerShiftReg(reset.asBool, 10) || reset.asBool`)**. A short reset pulse is shifted through and re-appears as a spurious mid-run CPU reset ~10 cycles later. Symptom: the core's first icache refill burst was aborted after 3 beats by the spurious reset, the AXI4Fragmenter kept holding the unconsumed 4th beat, the core re-issued ARs the fragmenter could not accept, and the fabric deadlocked (no UART output). Fix: the harness holds reset for 20 cycles (`soc_main.cpp`). With that, the first burst completes cleanly and `SOC\n` is printed.
+
+Validation:
+
+- `make -C npc soc-smoke` from a clean `npc/build/soc`: output contains `SOC` (RTL `$write` from `uart_tfifo.v`) and `NPC_SOC_RESULT status=limit reason=cycle_limit cycles=2000 limit=2000 mrom_reads=12`; exit 0. The AXI trace shows clean 4-beat icache refills through the AXI4Fragmenter and UART word stores with ~3-cycle APB write latency.
+- Existing flows re-verified after the change: debug-mode `make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-csr-trap test-debug test-icache test-fencei` (exit 0) and spec-mode `make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke` (`NPC_SPEC_RESULT status=good reason=uart_eot cycles=61`, exit 0). Note `make -C npc clean` removes `build/soc` too; rebuild with `make -C npc soc-smoke`.
+- `npc/README.md` documents the SoC flavor.
+
+Observed SoC facts for later sessions:
+
+- Reset latency: 20 held + 10 shift-register cycles of CPU reset before the first AR (~30 cycles).
+- The SoC xbar/fragmenter path to MROM delivers one R beat every 2 cycles; APB (UART) writes complete in ~3 cycles. Word stores (`wstrb=1111`) to the UART16550 THR work; the UART prints the low byte.
+- `mrom_reads=12` for the smoke = 3 lines x 4 words (the `jal x0,0` spin hits in icache afterwards).
+
 ## Next steps
 
-1. Start `P9-S2: SoC Verilator harness and MROM/UART smoke` (session 2 of Phase 9 in `notes/plan.md`): add a SoC build flavor to the NPC flow (output under `npc/build/soc/`), compile all `ysyxSoC/perip/**/*.v` with include dirs `perip/uart16550/rtl` + `perip/spi/rtl`, flags `--timescale "1ns/1ns" --no-timing`, the post-processed `ysyxSoCFull.v` copied into our own build dir with `ysyx_00000000` renamed to `NPC`, and the physical NPC RTL in `NPC_DEBUG=0` spec-port mode (no `NPC_LOCAL_AXI`). Add `mrom_read()` (image at `0x20000000`) and an `assert(0)` `flash_read()` DPI stub, plus `Verilated::commandArgs(argc, argv)`. Zero-patch smoke: tiny MROM program storing a marker char to UART16550, terminated by cycle limit, pass/fail from structured output + RTL-printed UART bytes.
+1. Start `P9-S3: Debug/commit exposure patch and DiffTest restoration` (session 3 of Phase 9 in `notes/plan.md`): create `ysyxSoC.patch` routing the NPC `NPC_DEBUG=1` debug/commit signals and `io_reset_pc` through `src/CPU.scala`, `src/SoC.scala`, `src/Top.scala` to the SoC top; rebuild the SoC flavor with `NPC_DEBUG=1`; restore precise `ebreak` termination, structured `NPC_RESULT` lines, and event DiffTest (add MROM `0x20000000..0x20000fff` + SRAM `0x0f000000..0x0f001fff` regions to NEMU, sync the MROM image into the REF). Verify with the P9-S2 smoke plus a small multi-line program exercising icache burst refill.
 2. Never commit inside the `ysyxSoC` submodule; keep tracked-source debug changes as `ysyxSoC.patch` at the repo root (regenerate: `git -C ysyxSoC diff > ../ysyxSoC.patch`; apply on fresh checkouts: `git -C ysyxSoC apply ../ysyxSoC.patch`). Note this diff does not cover the nested `rocket-chip` patch — that one is re-applied by `make -C ysyxSoC dev-init` on fresh clones.
-3. If the user wants to persist the P8 closeout or the P9-S1 state, ask before making a git commit. P9-S1 produces no tracked changes outside `notes/` (generated files live in gitignored `ysyxSoC/build/` and `ysyxSoC/out/`), so a P9-S1 commit would cover notes only.
+3. If the user wants to persist the P8 closeout, P9-S1, or P9-S2 state, ask before making a git commit. P9-S2 adds tracked files: `npc/csrc/soc_main.cpp`, `npc/tests/make-soc-uart-bin.py`, `npc/Makefile`, `npc/rtl/bus/AxiMaster.v` (guarded probes), `npc/README.md`, and notes.
 4. Keep the STA caveat in mind: current timing is standalone core-top STA with only a core clock constraint; no SoC AXI input/output delays are modeled yet.
 
 ## Phase 9 planning facts (verified on the macOS host; re-verify on Linux)

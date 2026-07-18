@@ -93,6 +93,26 @@ module AxiMaster (
   assign axi_arburst = 2'b01;
   assign axi_rready = state == S_READ_DATA;
 
+`ifdef NPC_TRACE_AXI
+  always @(posedge clock) begin
+    if (reset) begin
+      $display("AXI t=%0t RESET", $time);
+    end
+    if (state == S_READ_ADDR && axi_arvalid) begin
+      $display("AXI t=%0t AR addr=%08x len=%0d arready=%b", $time, axi_araddr, axi_arlen, axi_arready);
+    end
+    if (state == S_READ_DATA) begin
+      $display("AXI t=%0t R beat=%0d rvalid=%b rlast=%b rdata=%08x", $time, read_beat_q, axi_rvalid, axi_rlast, axi_rdata);
+    end
+    if (state == S_WRITE_REQ) begin
+      $display("AXI t=%0t W addr=%08x data=%08x strb=%b awready=%b wready=%b", $time, axi_awaddr, axi_wdata, axi_wstrb, axi_awready, axi_wready);
+    end
+    if (state == S_WRITE_RESP) begin
+      $display("AXI t=%0t B bvalid=%b bresp=%b", $time, axi_bvalid, axi_bresp);
+    end
+  end
+`endif
+
   always @(posedge clock) begin
     if (reset) begin
       state <= S_IDLE;

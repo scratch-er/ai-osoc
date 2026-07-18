@@ -31,6 +31,27 @@ STA_LOG_DIR ?= ../build/p8-s2-ppa
 CPP_SRCS := csrc/main.cpp csrc/memory.cpp csrc/dpi.cpp
 TRACE ?= 0
 
+# ysyxSoC simulation flavor (P9): sim top is ysyxSoCTop, the core runs in
+# NPC_DEBUG=0 spec-port mode (no NPC_LOCAL_AXI) and is instantiated by the
+# generated SoC. Requires ysyxSoC/build/ysyxSoCFull.v (see notes/next.md).
+SOC_DIR ?= ../ysyxSoC
+SOC_BUILD_DIR := $(BUILD_DIR)/soc
+SOC_OBJ_DIR := $(SOC_BUILD_DIR)/obj_dir
+SOC_BIN := $(SOC_BUILD_DIR)/npc-soc
+SOC_GEN_V := $(SOC_DIR)/build/ysyxSoCFull.v
+SOC_V := $(SOC_BUILD_DIR)/ysyxSoCFull.v
+SOC_PERIP_SRCS := $(shell find $(SOC_DIR)/perip -name '*.v' | sort)
+SOC_RTL_SRCS := $(filter-out rtl/bus/LocalAxiSlave.v rtl/bus/MemIf.v,$(RTL_SRCS))
+SOC_CXXFLAGS += -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter
+SOC_VERILATOR_FLAGS := --cc --exe --build --top-module ysyxSoCTop \
+	--timescale "1ns/1ns" --no-timing -Wno-fatal --autoflush \
+	-Irtl -I$(SOC_DIR)/perip/uart16550/rtl -I$(SOC_DIR)/perip/spi/rtl \
+	-Mdir $(SOC_OBJ_DIR) -o ../npc-soc \
+	csrc/soc_main.cpp $(SOC_V) $(SOC_PERIP_SRCS) $(SOC_RTL_SRCS)
+ifeq ($(TRACE),1)
+SOC_VERILATOR_FLAGS += --trace
+endif
+
 ifeq ($(NPC_DEBUG),1)
 CPP_SRCS += csrc/difftest.cpp
 VERILATOR_DEBUG_FLAG := +define+NPC_DEBUG
@@ -40,7 +61,7 @@ ifeq ($(TRACE),1)
 VERILATOR_FLAGS += --trace
 endif
 
-.PHONY: all run sta sta-sweep smoke spec-smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-axi-local test-mem-latency test-access-fault test-rv32e-illegal test-csr-trap test-debug test-difftest test-clint test-icache test-fencei clean
+.PHONY: all run sta sta-sweep smoke spec-smoke soc soc-smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-axi-local test-mem-latency test-access-fault test-rv32e-illegal test-csr-trap test-debug test-difftest test-clint test-icache test-fencei clean
 
 all: $(BIN)
 
@@ -64,6 +85,23 @@ $(BIN): $(RTL_SRCS) $(CPP_SRCS)
 
 run: $(BIN)
 	$(BIN) $(ARGS)
+
+$(SOC_V): $(SOC_GEN_V)
+	@mkdir -p $(SOC_BUILD_DIR)
+	sed 's/ysyx_00000000/NPC/g' $< > $@
+
+$(SOC_BIN): $(SOC_V) $(SOC_RTL_SRCS) csrc/soc_main.cpp
+	$(VERILATOR) $(SOC_VERILATOR_FLAGS) -CFLAGS "$(SOC_CXXFLAGS)"
+
+soc: $(SOC_BIN)
+
+soc-smoke: $(SOC_BIN)
+	@mkdir -p $(SOC_BUILD_DIR)/tests
+	@python3 tests/make-soc-uart-bin.py $(SOC_BUILD_DIR)/tests/soc-uart.bin
+	@out="$$($(SOC_BIN) --image $(SOC_BUILD_DIR)/tests/soc-uart.bin --max-cycles 2000 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'SOC' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_SOC_RESULT status=limit reason=cycle_limit' >/dev/null
 
 spec-smoke: $(BIN)
 	@mkdir -p $(BUILD_DIR)/tests

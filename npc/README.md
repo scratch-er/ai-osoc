@@ -191,10 +191,37 @@ NPC_DIFFTEST status=on ref=../nemu/build/riscv32-nemu-interpreter-so base=0x8000
 
 On a mismatch it reports the first differing CommitEvent field, the REF/DUT event lines, REF recent history if available, and the normal NPC bounded history/register dump.
 
+## ysyxSoC simulation flavor
+
+The `soc` build flavor simulates the core inside the generated ysyxSoC (`ysyxSoCTop`), with the core running in `NPC_DEBUG=0` spec-port mode (no `NPC_LOCAL_AXI`). It requires the elaborated SoC Verilog at `ysyxSoC/build/ysyxSoCFull.v` (see `notes/next.md` for the elaboration commands); the build copies it to `npc/build/soc/ysyxSoCFull.v` and renames the `ysyx_00000000` CPU black box to `NPC`.
+
+Build and run the zero-patch MROM/UART smoke (a tiny MROM program prints `SOC` through the UART16550, validating both MROM fetch with icache burst refill and the AXI-to-APB MMIO store path):
+
+```sh
+make -C npc soc-smoke
+```
+
+The smoke terminates by cycle limit (no debug ports are exposed at the SoC top yet); pass/fail comes from the RTL-printed UART bytes plus the structured line:
+
+```text
+NPC_SOC_RESULT status=limit reason=cycle_limit cycles=2000 limit=2000 mrom_reads=12
+```
+
+The SoC harness (`npc/csrc/soc_main.cpp`) provides the `mrom_read()` DPI (image loaded at `0x20000000`) and an `assert(0)` `flash_read()` stub, and supports `--image`, `--max-cycles`, and `--wave` (build with `TRACE=1`). The SoC build passes `--autoflush` so the UART16550's single-character `$write` output is flushed immediately instead of sitting in the stdio buffer (important if the sim is killed or stops on an RTL `$fatal` before exit). Note: ysyxSoC delays the CPU reset through a 10-stage `SynchronizerShiftReg`, so the harness holds reset for 20 cycles; a shorter reset re-appears as a spurious mid-run reset pulse.
+
+For AXI-level debugging, building the SoC flavor with `+define+NPC_TRACE_AXI` (add to `SOC_VERILATOR_FLAGS`) enables `$display` probes in `rtl/bus/AxiMaster.v` that log every AR/R/W/B channel event.
+
 ## Waveforms
 
 Waveform generation is still available when building with Verilator tracing:
 
 ```sh
 make -C npc TRACE=1 run ARGS="--wave --max-cycles 8"
+```
+
+For the SoC flavor:
+
+```sh
+make -C npc TRACE=1 soc
+npc/build/soc/npc-soc --image npc/build/soc/tests/soc-uart.bin --max-cycles 200 --wave
 ```
