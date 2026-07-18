@@ -33,12 +33,18 @@ static uint8_t *pmem = NULL;
 static uint8_t pmem[CONFIG_MSIZE] PG_ALIGN = {};
 #endif
 
+// SoC memory regions: MROM (read-only boot ROM) and SRAM.
+static uint8_t mrom[0x1000] PG_ALIGN = {};
+static uint8_t sram[0x2000] PG_ALIGN = {};
+
 static MemRegion mem_regions[] = {
 #if defined(CONFIG_MEM_SCHEME_NPC)
   { "npc-pmem", CONFIG_MBASE, 0x01000000u, NULL, true, true },
 #else
   { "pmem", CONFIG_MBASE, CONFIG_MSIZE, NULL, true, true },
 #endif
+  { "mrom", 0x20000000u, 0x00001000u, mrom, true, false },
+  { "sram", 0x0f000000u, 0x00002000u, sram, true, true },
 };
 
 #define NR_MEM_REGION ARRLEN(mem_regions)

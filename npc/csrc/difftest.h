@@ -16,6 +16,9 @@ public:
   bool init(const std::string &ref_so, const Memory &memory, uint32_t reset_pc,
             const uint32_t *regs, uint32_t pc, uint32_t mstatus, uint32_t mtvec,
             uint32_t mepc, uint32_t mcause);
+  bool init(const std::string &ref_so, uint32_t reset_pc, const uint8_t *image, size_t image_size,
+            const uint32_t *regs, uint32_t pc, uint32_t mstatus, uint32_t mtvec,
+            uint32_t mepc, uint32_t mcause);
   bool enabled() const { return enabled_; }
   bool step(const CommitEvent &dut_event, const MMIOReplayRecord &mmio_record,
             const uint32_t *regs, uint32_t pc, uint32_t mstatus, uint32_t mtvec,

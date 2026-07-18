@@ -27,6 +27,14 @@ void Difftest::fill_state(CPUState *state, const uint32_t *regs, uint32_t pc,
 bool Difftest::init(const std::string &ref_so, const Memory &memory, uint32_t reset_pc,
                     const uint32_t *regs, uint32_t pc, uint32_t mstatus, uint32_t mtvec,
                     uint32_t mepc, uint32_t mcause) {
+  std::vector<uint8_t> image(memory.size());
+  memory.copy_to(image.data(), reset_pc, memory.size());
+  return init(ref_so, reset_pc, image.data(), image.size(), regs, pc, mstatus, mtvec, mepc, mcause);
+}
+
+bool Difftest::init(const std::string &ref_so, uint32_t reset_pc, const uint8_t *image, size_t image_size,
+                    const uint32_t *regs, uint32_t pc, uint32_t mstatus, uint32_t mtvec,
+                    uint32_t mepc, uint32_t mcause) {
   handle_ = dlopen(ref_so.c_str(), RTLD_LAZY);
   if (handle_ == nullptr) {
     std::fprintf(stderr, "difftest dlopen failed: %s\n", dlerror());
@@ -48,16 +56,14 @@ bool Difftest::init(const std::string &ref_so, const Memory &memory, uint32_t re
 
   ref_init_(0);
 
-  std::vector<uint8_t> image(memory.size());
-  memory.copy_to(image.data(), reset_pc, memory.size());
-  ref_memcpy_(reset_pc, image.data(), image.size(), DIFFTEST_TO_REF);
+  ref_memcpy_(reset_pc, const_cast<uint8_t *>(image), image_size, DIFFTEST_TO_REF);
 
   CPUState dut;
   fill_state(&dut, regs, pc, mstatus, mtvec, mepc, mcause);
   ref_regcpy_(&dut, DIFFTEST_TO_REF);
   enabled_ = true;
-  std::printf("NPC_DIFFTEST status=on ref=%s base=0x%08x size=%u event_api=%u\n",
-              ref_so.c_str(), reset_pc, memory.size(), ref_step_event_ != nullptr);
+  std::printf("NPC_DIFFTEST status=on ref=%s base=0x%08x size=%zu event_api=%u\n",
+              ref_so.c_str(), reset_pc, image_size, ref_step_event_ != nullptr);
   return true;
 }
 

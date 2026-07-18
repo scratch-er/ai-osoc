@@ -1,0 +1,188 @@
+diff --git a/src/CPU.scala b/src/CPU.scala
+index 7559195f..5bad4a80 100644
+--- a/src/CPU.scala
++++ b/src/CPU.scala
+@@ -13,13 +13,82 @@ object CPUAXI4BundleParameters {
+   def apply() = AXI4BundleParameters(addrBits = 32, dataBits = 32, idBits = ChipLinkParam.idBits)
+ }
+ 
++// Debug/commit observation bundle of the NPC core. Field names here are
++// internal; the BlackBox below uses the exact Verilog port names of npc/rtl/NPC.v
++// (NPC_DEBUG=1 build), and CPU.Impl wires one to the other.
++class CpuDebugBundle extends Bundle {
++  val pc             = UInt(32.W)
++  val halted         = Bool()
++  val x1             = UInt(32.W)
++  val a0             = UInt(32.W)
++  val trap_status    = UInt(2.W)
++  val inst           = UInt(32.W)
++  val mstatus        = UInt(32.W)
++  val mtvec          = UInt(32.W)
++  val mepc           = UInt(32.W)
++  val mcause         = UInt(32.W)
++  val regs_flat      = UInt(512.W)
++  val icache_accesses         = UInt(64.W)
++  val icache_hits             = UInt(64.W)
++  val icache_misses           = UInt(64.W)
++  val icache_miss_wait_cycles = UInt(64.W)
++  val icache_refill_beats     = UInt(64.W)
++  val commit_valid     = Bool()
++  val commit_pc        = UInt(32.W)
++  val commit_inst      = UInt(32.W)
++  val commit_next_pc   = UInt(32.W)
++  val commit_wen       = Bool()
++  val commit_rd        = UInt(5.W)
++  val commit_wdata     = UInt(32.W)
++  val commit_exception = Bool()
++  val commit_cause     = UInt(32.W)
++  val commit_mem_wen   = Bool()
++  val commit_mem_ren   = Bool()
++  val commit_mem_addr  = UInt(32.W)
++  val commit_mem_wdata = UInt(32.W)
++  val commit_mem_wmask = UInt(4.W)
++  val commit_mem_rdata = UInt(32.W)
++}
++
+ class ysyx_00000000 extends BlackBox {
+   val io = IO(new Bundle {
+     val clock = Input(Clock())
+     val reset = Input(Reset())
++    val io_reset_pc = Input(UInt(32.W))
+     val io_interrupt = Input(Bool())
+     val io_master = AXI4Bundle(CPUAXI4BundleParameters())
+     val io_slave = Flipped(AXI4Bundle(CPUAXI4BundleParameters()))
++    val debug_pc         = Output(UInt(32.W))
++    val debug_halted     = Output(Bool())
++    val debug_x1         = Output(UInt(32.W))
++    val debug_a0         = Output(UInt(32.W))
++    val debug_trap_status = Output(UInt(2.W))
++    val debug_inst       = Output(UInt(32.W))
++    val debug_mstatus    = Output(UInt(32.W))
++    val debug_mtvec      = Output(UInt(32.W))
++    val debug_mepc       = Output(UInt(32.W))
++    val debug_mcause     = Output(UInt(32.W))
++    val debug_regs_flat  = Output(UInt(512.W))
++    val debug_icache_accesses         = Output(UInt(64.W))
++    val debug_icache_hits             = Output(UInt(64.W))
++    val debug_icache_misses           = Output(UInt(64.W))
++    val debug_icache_miss_wait_cycles = Output(UInt(64.W))
++    val debug_icache_refill_beats     = Output(UInt(64.W))
++    val commit_valid     = Output(Bool())
++    val commit_pc        = Output(UInt(32.W))
++    val commit_inst      = Output(UInt(32.W))
++    val commit_next_pc   = Output(UInt(32.W))
++    val commit_wen       = Output(Bool())
++    val commit_rd        = Output(UInt(5.W))
++    val commit_wdata     = Output(UInt(32.W))
++    val commit_exception = Output(Bool())
++    val commit_cause     = Output(UInt(32.W))
++    val commit_mem_wen   = Output(Bool())
++    val commit_mem_ren   = Output(Bool())
++    val commit_mem_addr  = Output(UInt(32.W))
++    val commit_mem_wdata = Output(UInt(32.W))
++    val commit_mem_wmask = Output(UInt(4.W))
++    val commit_mem_rdata = Output(UInt(32.W))
+   })
+ }
+ 
+@@ -33,13 +102,48 @@ class CPU(idBits: Int)(implicit p: Parameters) extends LazyModule {
+   class Impl extends LazyModuleImp(this) {
+     val (master, _) = masterNode.out(0)
+     val interrupt = IO(Input(Bool()))
++    val reset_pc = IO(Input(UInt(32.W)))
++    val debug = IO(Output(new CpuDebugBundle))
+     val slave = IO(Flipped(AXI4Bundle(CPUAXI4BundleParameters())))
+ 
+     val cpu = Module(new ysyx_00000000)
+     cpu.io.clock := clock
+     cpu.io.reset := reset
++    cpu.io.io_reset_pc := reset_pc
+     cpu.io.io_interrupt := interrupt
+     cpu.io.io_slave <> slave
+     master <> cpu.io.io_master
++
++    debug.pc         := cpu.io.debug_pc
++    debug.halted     := cpu.io.debug_halted
++    debug.x1         := cpu.io.debug_x1
++    debug.a0         := cpu.io.debug_a0
++    debug.trap_status := cpu.io.debug_trap_status
++    debug.inst       := cpu.io.debug_inst
++    debug.mstatus    := cpu.io.debug_mstatus
++    debug.mtvec      := cpu.io.debug_mtvec
++    debug.mepc       := cpu.io.debug_mepc
++    debug.mcause     := cpu.io.debug_mcause
++    debug.regs_flat  := cpu.io.debug_regs_flat
++    debug.icache_accesses         := cpu.io.debug_icache_accesses
++    debug.icache_hits             := cpu.io.debug_icache_hits
++    debug.icache_misses           := cpu.io.debug_icache_misses
++    debug.icache_miss_wait_cycles := cpu.io.debug_icache_miss_wait_cycles
++    debug.icache_refill_beats     := cpu.io.debug_icache_refill_beats
++    debug.commit_valid     := cpu.io.commit_valid
++    debug.commit_pc        := cpu.io.commit_pc
++    debug.commit_inst      := cpu.io.commit_inst
++    debug.commit_next_pc   := cpu.io.commit_next_pc
++    debug.commit_wen       := cpu.io.commit_wen
++    debug.commit_rd        := cpu.io.commit_rd
++    debug.commit_wdata     := cpu.io.commit_wdata
++    debug.commit_exception := cpu.io.commit_exception
++    debug.commit_cause     := cpu.io.commit_cause
++    debug.commit_mem_wen   := cpu.io.commit_mem_wen
++    debug.commit_mem_ren   := cpu.io.commit_mem_ren
++    debug.commit_mem_addr  := cpu.io.commit_mem_addr
++    debug.commit_mem_wdata := cpu.io.commit_mem_wdata
++    debug.commit_mem_wmask := cpu.io.commit_mem_wmask
++    debug.commit_mem_rdata := cpu.io.commit_mem_rdata
+   }
+ }
+diff --git a/src/SoC.scala b/src/SoC.scala
+index 1c65cd87..c1e79761 100644
+--- a/src/SoC.scala
++++ b/src/SoC.scala
+@@ -61,6 +61,12 @@ class ysyxSoCASIC(implicit p: Parameters) extends LazyModule {
+     // to initialize some async modules before accept any requests from cpu
+     cpu.module.reset := SynchronizerShiftReg(reset.asBool, 10) || reset.asBool
+ 
++    // Expose NPC debug/commit observation and reset PC to the SoC top.
++    val reset_pc = IO(Input(UInt(32.W)))
++    val debug = IO(Output(new CpuDebugBundle))
++    cpu.module.reset_pc := reset_pc
++    debug := cpu.module.debug
++
+     val fpga_io = if (Config.hasChipLink) Some(IO(chiselTypeOf(chipMaster.get.module.fpga_io))) else None
+     if (Config.hasChipLink) {
+       // connect chiplink slave interface to crossbar
+@@ -111,6 +117,12 @@ class ysyxSoCFull(implicit p: Parameters) extends LazyModule {
+   class Impl extends LazyModuleImp(this) with DontTouch {
+     val masic = asic.module
+ 
++    // Pass NPC debug/commit observation and reset PC through to the SoC top.
++    val reset_pc = IO(Input(UInt(32.W)))
++    val debug = IO(Output(new CpuDebugBundle))
++    masic.reset_pc := reset_pc
++    debug := masic.debug
++
+     if (Config.hasChipLink) {
+       val fpga = LazyModule(new ysyxSoCFPGA)
+       val mfpga = Module(fpga.module)
+diff --git a/src/Top.scala b/src/Top.scala
+index c00378a6..888042ec 100644
+--- a/src/Top.scala
++++ b/src/Top.scala
+@@ -13,11 +13,16 @@ object Config {
+ class ysyxSoCTop extends Module {
+   implicit val config: Parameters = new Config(new Edge32BitConfig ++ new DefaultRV32Config)
+ 
+-  val io = IO(new Bundle { })
++  val io = IO(new Bundle {
++    val reset_pc = Input(UInt(32.W))
++    val debug = Output(new CpuDebugBundle)
++  })
+   val dut = LazyModule(new ysyxSoCFull)
+   val mdut = Module(dut.module)
+   mdut.dontTouchPorts()
+   mdut.externalPins := DontCare
++  mdut.reset_pc := io.reset_pc
++  io.debug := mdut.debug
+ }
+ 
+ object Elaborate extends App {
