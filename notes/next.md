@@ -999,6 +999,8 @@ What changed:
 - `npc/Makefile`: widened tight single-instruction trap test cycle limits from 8 to 12 where the extra fetch-register transfer cycle is visible (`branch-misaligned`, `csr-readonly-illegal`, `rv32e-illegal`). Functional expectations are unchanged.
 - `npc/Makefile`: `spec-smoke` now accepts both `NPC_RESULT ... uart_eot` and the spec-mode `NPC_SPEC_RESULT ... uart_eot` line.
 - `npc/rtl/core/Core.v`: included `xc_inst` in the spec-mode unused reduction to keep `NPC_DEBUG=0` Verilator lint clean.
+- `npc/rtl/core/Ifu.v`: wrapped the 64-bit icache performance counters (`accesses`, `hits`, `misses`, `miss_wait_cycles`, `refill_beats`) in `NPC_DEBUG`. Debug/DiffTest simulation still reports the counters, while `NPC_DEBUG=0` physical synthesis drops the unused counter flops and adders.
+- Measured and rejected an attempted physical-only `xc_inst` packet trim: it reduced area to about `24200` but moved the 600 MHz path to about `-0.105 ns`, so `xc_inst` remains registered in physical mode.
 
 Measured STA/PPA:
 
@@ -1014,6 +1016,13 @@ Measured STA/PPA:
   - worst path endpoint `u_core.xc_normal_next_pc_5__reg_p:D`
   - worst path delay `1.558 ns`, reported Fmax `623.649 MHz`
   - clean checked `600 MHz` (`+0.063 ns`), first failing checked `650 MHz` (`-0.065 ns`)
+- P10-S3 area-counter-gate (`build/p10-s3-area-counter-gate/pipeline`):
+  - area `24273.200000` (`-1103.200000`, `-4.35%` vs no-direct; `-1697.920000`, `-6.54%` vs P10-S2 pipeline)
+  - `1603` DFFs (`-30` vs no-direct; `-22` vs P10-S2 pipeline)
+  - worst path endpoint `u_core.xc_normal_next_pc_7__reg_p:D`
+  - worst path delay `1.730 ns`, reported Fmax `562.903 MHz`
+  - clean checked `560 MHz` (`+0.008 ns`), `600 MHz` fails by about `-0.111 ns`
+  - Interpretation: keep this as the current area-optimized point because it removes physical-only debug counters and gives a larger area reduction. The tradeoff is lower Fmax than no-direct, but still above the original P10-S2 pipeline Fmax. Do not compare this directly against the P8-S3 single-cycle 610 MHz point without also accounting for the P10 pipeline CPI/area changes.
 
 Performance tradeoff:
 
@@ -1035,6 +1044,8 @@ make -C npc smoke spec-smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
 ```
 
 A later rerun of the DiffTest-backed tail (`test-access-fault test-clint test-difftest`) passed after the NEMU REF rebuild; the full directed run passed through those same checks when the valid REF was present.
+
+After the area-counter-gate change, the same directed command was rerun and passed. The debug `NPC_ICACHE` lines still reported non-zero counters in `NPC_DEBUG=1` simulation, confirming that only the physical `NPC_DEBUG=0` counter flops were removed.
 
 4. Spec-mode smoke passed:
 
@@ -1065,8 +1076,8 @@ make -C rt-thread-am/bsp/abstract-machine ARCH=riscv32e-npc \
 
 Current working tree notes:
 
-- Intended P10-S3 source changes: `npc/rtl/core/Core.v`, `npc/Makefile`, `notes/plan.md`, `notes/next.md`.
-- Tool-generated/rebuilt files may also be dirty: `nemu/build/`, `nemu/tools/*/build/`, `rt-thread-am/bsp/abstract-machine/files.mk`; inspect before committing.
+- Intended P10-S3 source changes now include `npc/rtl/core/Core.v`, `npc/rtl/core/Ifu.v`, `npc/Makefile`, `notes/plan.md`, `notes/next.md`.
+- Current area-counter-gate source delta is only the `Ifu.v` physical/debug counter guard on top of the earlier P10-S3 changes. Build output under `npc/build/` and STA output under `build/p10-s3-*` are generated artifacts; inspect before committing.
 - `ysyxSoC` still appears modified as a submodule from prior P9 work; do not commit inside it.
 
 Next steps:

@@ -101,7 +101,6 @@ module Core #(
   reg [31:0] xc_rs2_data;
   reg [31:0] xc_alu_result;
   reg [31:0] xc_lsu_addr;
-  reg [31:0] xc_pc_plus_4;
   reg [31:0] xc_normal_next_pc;
   reg        xc_is_mret;
   reg        xc_is_fence_i;
@@ -266,9 +265,10 @@ module Core #(
                                   (xc_mem_wen && c_mem_access_fault) ? {27'd0, `NPC_EXC_STORE_ACCESS_FAULT} :
                                   xc_is_ecall ? {27'd0, `NPC_EXC_ECALL_M} :
                                   xc_is_ebreak ? {27'd0, `NPC_EXC_BREAKPOINT} : 32'd0;
+  wire [31:0] c_pc_plus_4 = xc_pc + 32'd4;
   wire [31:0] c_next_pc = c_precise_trap ? mtvec : (c_bad_without_vector ? xc_pc : xc_normal_next_pc);
   wire [31:0] c_wb_mux = (xc_wb_sel == `NPC_WB_MEM) ? lsu_rdata :
-                         ((xc_wb_sel == `NPC_WB_PC4) ? xc_pc_plus_4 :
+                         ((xc_wb_sel == `NPC_WB_PC4) ? c_pc_plus_4 :
                           ((xc_wb_sel == `NPC_WB_CSR) ? xc_csr_rdata : xc_alu_result));
   wire [31:0] c_forward_data = c_wb_mux;
   wire        c_can_forward = xc_valid && c_wb_wen;
@@ -278,8 +278,8 @@ module Core #(
   wire        load_use_stall = c_load_waiting && xc_writes_rd && (c_rs1_match || c_rs2_match);
   wire        c_stage_stall = xc_valid && !c_mem_ready;
   wire        x_can_advance = x_valid && !c_stage_stall && !load_use_stall && (!xc_valid || c_retire_ready);
-  wire        fx_can_accept = !fx_valid || x_can_advance || (c_retire_ready && c_next_pc != xc_pc_plus_4);
-  wire        redirect = c_retire_ready && (c_precise_trap || c_bad_without_vector || c_next_pc != xc_pc_plus_4 || (c_complete_inst && xc_is_fence_i));
+  wire        fx_can_accept = !fx_valid || x_can_advance || (c_retire_ready && c_next_pc != c_pc_plus_4);
+  wire        redirect = c_retire_ready && (c_precise_trap || c_bad_without_vector || c_next_pc != c_pc_plus_4 || (c_complete_inst && xc_is_fence_i));
   wire        ifu_fetch_valid = !halted && !reset && !fx_valid && !drop_fetch_response && !redirect;
   wire        ifu_invalidate = c_retire_ready && c_complete_inst && xc_is_fence_i;
 
@@ -560,37 +560,7 @@ module Core #(
       ifu_pending <= 1'b0;
       drop_fetch_response <= 1'b0;
       fx_valid <= 1'b0;
-      fx_pc <= 32'd0;
-      fx_inst <= 32'd0;
-      fx_inst_error <= 1'b0;
       xc_valid <= 1'b0;
-      xc_pc <= 32'd0;
-      xc_inst <= 32'd0;
-      xc_inst_error <= 1'b0;
-      xc_rd <= 5'd0;
-      xc_writes_rd <= 1'b0;
-      xc_wb_sel <= `NPC_WB_ALU;
-      xc_mem_ren <= 1'b0;
-      xc_mem_wen <= 1'b0;
-      xc_mem_size <= `NPC_MEM_WORD;
-      xc_mem_unsigned <= 1'b0;
-      xc_csr_cmd <= `NPC_CSR_NONE;
-      xc_csr_addr <= 12'd0;
-      xc_csr_uimm <= 5'd0;
-      xc_csr_rdata <= 32'd0;
-      xc_rs1_data <= 32'd0;
-      xc_rs2_data <= 32'd0;
-      xc_alu_result <= 32'd0;
-      xc_lsu_addr <= 32'd0;
-      xc_pc_plus_4 <= 32'd0;
-      xc_normal_next_pc <= 32'd0;
-      xc_is_mret <= 1'b0;
-      xc_is_fence_i <= 1'b0;
-      xc_decode_legal <= 1'b0;
-      xc_pc_exception <= 1'b0;
-      xc_mem_misaligned <= 1'b0;
-      xc_is_ecall <= 1'b0;
-      xc_is_ebreak <= 1'b0;
     end else begin
       if (ifu_inst_ready) begin
         ifu_pending <= 1'b0;
@@ -641,7 +611,6 @@ module Core #(
         xc_rs2_data <= x_rs2_data;
         xc_alu_result <= alu_result;
         xc_lsu_addr <= x_lsu_addr;
-        xc_pc_plus_4 <= x_pc_plus_4;
         xc_normal_next_pc <= x_normal_next_pc;
         xc_is_mret <= x_is_mret;
         xc_is_fence_i <= x_is_fence_i;

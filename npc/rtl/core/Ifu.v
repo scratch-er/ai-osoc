@@ -45,11 +45,13 @@ module Ifu (
   reg [31:0] refill_word2_q;
   reg [31:0] refill_word3_q;
   reg        refill_error_q;
+`ifdef NPC_DEBUG
   reg [63:0] accesses_q;
   reg [63:0] hits_q;
   reg [63:0] misses_q;
   reg [63:0] miss_wait_cycles_q;
   reg [63:0] refill_beats_q;
+`endif
 
   wire        index = pc[4];
   wire [1:0]  offset = pc[3:2];
@@ -83,11 +85,19 @@ module Ifu (
   assign inst_ready = (state == S_IDLE && fetch_valid && hit) || refill_last;
   assign inst = (state == S_IDLE && hit) ? hit_word : refill_inst;
   assign inst_error = refill_last && refill_error;
+`ifdef NPC_DEBUG
   assign debug_accesses = accesses_q;
   assign debug_hits = hits_q;
   assign debug_misses = misses_q;
   assign debug_miss_wait_cycles = miss_wait_cycles_q;
   assign debug_refill_beats = refill_beats_q;
+`else
+  assign debug_accesses = 64'd0;
+  assign debug_hits = 64'd0;
+  assign debug_misses = 64'd0;
+  assign debug_miss_wait_cycles = 64'd0;
+  assign debug_refill_beats = 64'd0;
+`endif
 
   always @(posedge clock) begin
     if (reset) begin
@@ -113,11 +123,13 @@ module Ifu (
       refill_word2_q <= 32'd0;
       refill_word3_q <= 32'd0;
       refill_error_q <= 1'b0;
+`ifdef NPC_DEBUG
       accesses_q <= 64'd0;
       hits_q <= 64'd0;
       misses_q <= 64'd0;
       miss_wait_cycles_q <= 64'd0;
       refill_beats_q <= 64'd0;
+`endif
     end else begin
       if (invalidate) begin
         valid_q <= 2'b00;
@@ -127,11 +139,15 @@ module Ifu (
         S_IDLE: begin
           if (fetch_valid) begin
             if (hit) begin
+`ifdef NPC_DEBUG
               accesses_q <= accesses_q + 64'd1;
               hits_q <= hits_q + 64'd1;
+`endif
             end else begin
+`ifdef NPC_DEBUG
               accesses_q <= accesses_q + 64'd1;
               misses_q <= misses_q + 64'd1;
+`endif
               state <= S_REFILL;
               miss_index_q <= index;
               miss_offset_q <= offset;
@@ -147,9 +163,13 @@ module Ifu (
           end
         end
         S_REFILL: begin
+`ifdef NPC_DEBUG
           miss_wait_cycles_q <= miss_wait_cycles_q + 64'd1;
+`endif
           if (refill_fire) begin
+`ifdef NPC_DEBUG
             refill_beats_q <= refill_beats_q + 64'd1;
+`endif
             refill_error_q <= refill_error;
             case (refill_beat_q)
               2'd0: refill_word0_q <= bus_rdata;
