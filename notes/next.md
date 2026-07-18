@@ -805,12 +805,76 @@ Open caveats:
 - `am-kernels/tests/cpu-tests/Makefile` still uses `/bin/echo -e`, so on macOS use the temporary Makefile/`printf` wrapper for individual cpu-tests.
 - The SoC integration still intentionally ignores PSRAM/SDRAM/flash XIP/GPIO/PS2/VGA/ChipLink.
 
+## Phase 9 Session 6 / closeout status
+
+`P9-S6: Phase 9 regression and closeout` is complete on the macOS host (Darwin 25.5.0 arm64, `riscv64-elf-` toolchain). Phase 9 is closed: AXI MROM fetch/refill, SRAM load/store, and UART16550 MMIO output paths are validated before entering Phase 10. No new functional bugs were found during this closeout run.
+
+Validation run in this closeout:
+
+1. SoC/AXI directed regression and memory test:
+
+```sh
+make -C npc soc-smoke test-soc-difftest test-soc-mem \
+  REF_SO=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+```
+
+Result: passed. Representative final lines:
+
+- `soc-smoke`: prints `SOC`, `NPC_RESULT status=limit reason=cycle_limit cycles=2000 insts=974 pc=0x20000024`, `NPC_ICACHE accesses=974 hits=971 misses=3 refill_beats=12`.
+- `test-soc-difftest`: `NEMU_RESULT status=good state=2 halt_pc=0x20000010 halt_ret=0 insts=19`; `NPC_RESULT status=good reason=good_trap cycles=65 insts=19 pc=0x20000010`; `NPC_ICACHE accesses=19 hits=17 misses=2 refill_beats=8`.
+- `test-soc-mem`: prints `PASS`, `NEMU_RESULT status=good state=2 halt_pc=0x20000198 halt_ret=0 insts=26702`; `NPC_RESULT status=good reason=good_trap cycles=98719 insts=26702 pc=0x20000198`; `NPC_ICACHE accesses=26702 hits=22584 misses=4118 refill_beats=16472`.
+
+Memory-test coverage: MROM program at `0x20000000` verifies the whole 8KB SRAM window `0x0f000000..0x0f001fff` with 2048-word fill/readback, byte and halfword `wstrb`, narrow loads/stores, read-after-write checks, and `lb`/`lbu` sign/zero extension. It runs under NEMU event DiffTest.
+
+2. Standalone NPC directed regression:
+
+```sh
+make -C npc smoke spec-smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
+  test-mem-size test-csr-trap test-rv32e-illegal test-difftest test-clint \
+  test-icache test-fencei test-debug test-axi-local test-access-fault \
+  REF_SO=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+```
+
+Result: passed. This includes local AXI memory tracing (`test-axi-local`), CLINT DiffTest/replay (`test-clint`), icache/fence.i, and access-fault DiffTest cases.
+
+3. Full 35-test `cpu-tests` sweep with NEMU event DiffTest:
+
+Result: all 35 passed using the portable macOS temporary-Makefile loop and `CROSS_COMPILE=riscv64-elf-`: `add`, `add-longlong`, `bit`, `bubble-sort`, `crc32`, `div`, `dummy`, `fact`, `fib`, `goldbach`, `hello-str`, `if-else`, `leap-year`, `load-store`, `matrix-mul`, `max`, `mersenne`, `min3`, `mov-c`, `movsx`, `mul-longlong`, `narcissistic`, `pascal`, `prime`, `quick-sort`, `recursion`, `select-sort`, `shift`, `string`, `sub-longlong`, `sum`, `switch`, `to-lower-case`, `unalign`, `wanshu`.
+
+Representative outputs:
+
+- `sum`: `NPC_RESULT status=good reason=good_trap cycles=1532 insts=528`, `NPC_ICACHE ... hit_rate_x1000=979 amat_x1000=1125`.
+- `matrix-mul`: `NPC_RESULT status=good reason=good_trap cycles=543774 insts=131726`, `NPC_ICACHE ... hit_rate_x1000=660 amat_x1000=3034`.
+- `crc32`: `NPC_RESULT status=good reason=good_trap cycles=67892 insts=18163`, `NPC_ICACHE ... hit_rate_x1000=740 amat_x1000=2557`.
+
+4. Existing workload regression:
+
+- NPC `hello` with NEMU event DiffTest passed: output contains `Hello, AbstractMachine!` and `mainargs = ''.`; `NEMU_RESULT status=good state=2 halt_pc=0x800000c4 halt_ret=0 insts=465`; `NPC_RESULT status=good reason=good_trap cycles=2116 insts=465 pc=0x800000c4`; `NPC_ICACHE ... hit_rate_x1000=638 amat_x1000=3167`.
+- AM timer/devscan bounded smoke (`am-tests mainargs=d`) reached the expected cycle limit without DiffTest mismatch: `NPC_RESULT status=limit reason=cycle_limit cycles=80000000 insts=25000215 pc=0x80000a5c`; `NPC_ICACHE ... hit_rate_x1000=999 amat_x1000=1000`. The `make run` target exits nonzero because this workload is intentionally bounded by cycle limit; treat this as expected for this smoke.
+- `yield-os` bounded smoke reached the expected cycle limit after printing `AB`: `NPC_RESULT status=limit reason=cycle_limit cycles=2000000 insts=624896`; `NPC_ICACHE ... hit_rate_x1000=999 amat_x1000=1001`. This infinite CTE workload also returns nonzero due to the deliberate bound.
+- `thread-os` bounded smoke reached the expected cycle limit after printing eight `Thread-B on CPU #0` lines: `NPC_RESULT status=limit reason=cycle_limit cycles=12000000 insts=3746560`; `NPC_ICACHE ... hit_rate_x1000=999 amat_x1000=1003`. This infinite CTE workload also returns nonzero due to the deliberate bound.
+- RT-Thread scripted shell `halt` with NEMU event DiffTest passed: output contains the RT-Thread banner, `Hello RISC-V!`, shell commands through `msh />halt`, `NEMU_RESULT status=good state=2 halt_pc=0x8000022c halt_ret=0 insts=511842`, and `NPC_RESULT status=good reason=good_trap cycles=1816964 insts=511842 pc=0x8001f718`; `NPC_ICACHE ... hit_rate_x1000=838 amat_x1000=1971`.
+- CoreMark default `ITERATIONS=1000` remains a bounded performance smoke, not a terminating correctness check at the current budget: it printed `Running CoreMark for 1000 iterations` and reached `NPC_RESULT status=limit reason=cycle_limit cycles=120000000 insts=28427454`; no DiffTest mismatch was reported before the bound.
+
+5. AM SoC workloads:
+
+- `riscv32e-ysyxsoc` `dummy` passed with DiffTest: `NEMU_RESULT status=good state=2 halt_pc=0x20000060 halt_ret=0 insts=25`; `NPC_RESULT status=good reason=good_trap cycles=162 insts=25 pc=0x20000060`.
+- `riscv32e-ysyxsoc` `hello` passed with DiffTest: output contains `Hello, AbstractMachine!` and `mainargs = ''.`; `NEMU_RESULT status=good state=2 halt_pc=0x20000108 halt_ret=0 insts=1347`; `NPC_RESULT status=good reason=good_trap cycles=6276 insts=1347 pc=0x20000108`; `NPC_ICACHE ... hit_rate_x1000=815 amat_x1000=2663`.
+
+Current known limitations after closing Phase 9:
+
+- The AM `riscv32e-ysyxsoc` platform still does not implement an LMA-to-VMA data copy boot path; broader SoC `cpu-tests` with writable globals remain a later bootloader/data-relocation task.
+- The SoC integration intentionally ignores PSRAM/SDRAM/flash XIP/GPIO/PS2/VGA/ChipLink. PSRAM (`0x80000000`) and SDRAM (`0xa0000000`) stubs must not be accessed in Phase 9 flows.
+- Keep `ysyxSoC.patch` at the repo root as the tracked patch for debug/commit exposure. Never commit inside the `ysyxSoC` submodule. Regenerate with `git -C ysyxSoC diff > ../ysyxSoC.patch`; apply on fresh checkouts with `git -C ysyxSoC apply ../ysyxSoC.patch`. The nested `rocket-chip` patch is still re-applied by `make -C ysyxSoC dev-init`.
+- `am-kernels/tests/cpu-tests/Makefile` still uses `/bin/echo -e`; on macOS keep using the temporary `printf` Makefile loop for full `cpu-tests` sweeps.
+- STA caveat remains: current timing is standalone core-top STA with only a core clock constraint; no SoC AXI input/output delays are modeled yet.
+- `ysyxSoC/build/` and `npc/build/` outputs are generated; rebuild on the current platform before trusting binaries after a host switch.
+
 ## Next steps
 
-1. Run `P9-S6: Phase 9 regression and closeout`: full existing regression (NPC directed tests, 35 cpu-tests with DiffTest, `hello`, CTE smokes, RT-Thread smoke) and update final Phase 9 notes/README details if needed.
-2. Never commit inside the `ysyxSoC` submodule; keep tracked-source debug changes as `ysyxSoC.patch` at the repo root (regenerate: `git -C ysyxSoC diff > ../ysyxSoC.patch`; apply on fresh checkouts: `git -C ysyxSoC apply ../ysyxSoC.patch`). Note this diff does not cover the nested `rocket-chip` patch — that one is re-applied by `make -C ysyxSoC dev-init` on fresh clones.
-3. P9-S5 adds/updates tracked files: `abstract-machine/am/src/riscv/ysyxsoc/trm.c`, `abstract-machine/scripts/platform/ysyxsoc.mk`, `abstract-machine/scripts/riscv32e-ysyxsoc.mk`, `abstract-machine/scripts/ysyxsoc-linker.ld`, `npc/rtl/core/Lsu.v`, `npc/rtl/bus/AxiMaster.v`, `npc/csrc/soc_main.cpp`, `npc/csrc/memory.cpp`, `nemu/src/device/npc-dev.c`, `nemu/src/memory/vaddr.c`, and notes.
-4. Keep the STA caveat in mind: current timing is standalone core-top STA with only a core clock constraint; no SoC AXI input/output delays are modeled yet.
+1. Start Phase 10 (`Optional Pipeline and Targeted Optimizations`) only after re-reading this closeout section and the Phase 10 section in `notes/plan.md`.
+2. Before any Phase 10 optimization, preserve the Phase 9 correctness suite above as the regression baseline, especially `test-soc-mem`, `test-soc-difftest`, 35 `cpu-tests`, `hello`, and RT-Thread.
+3. Do not commit unless the user explicitly asks. If asked to commit, include the Phase 8 and Phase 9 accumulated changes, but still do not commit inside the `ysyxSoC` submodule.
 
 ## Phase 9 planning facts (verified on the macOS host; re-verify on Linux)
 

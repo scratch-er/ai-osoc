@@ -193,21 +193,32 @@ On a mismatch it reports the first differing CommitEvent field, the REF/DUT even
 
 ## ysyxSoC simulation flavor
 
-The `soc` build flavor simulates the core inside the generated ysyxSoC (`ysyxSoCTop`), with the core running in `NPC_DEBUG=0` spec-port mode (no `NPC_LOCAL_AXI`). It requires the elaborated SoC Verilog at `ysyxSoC/build/ysyxSoCFull.v` (see `notes/next.md` for the elaboration commands); the build copies it to `npc/build/soc/ysyxSoCFull.v` and renames the `ysyx_00000000` CPU black box to `NPC`.
+The `soc` build flavor simulates the core inside the generated ysyxSoC (`ysyxSoCTop`). It requires the elaborated SoC Verilog at `ysyxSoC/build/ysyxSoCFull.v` (see `notes/next.md` for the elaboration commands); the build copies it to `npc/build/soc/ysyxSoCFull.v` and renames the `ysyx_00000000` CPU black box to `NPC`. The tracked `ysyxSoC.patch` routes `io_reset_pc`, debug registers, commit events, memory retire metadata, and icache counters to the SoC top for precise `ebreak` termination and event DiffTest. Do not commit inside the `ysyxSoC` submodule; regenerate the patch with `git -C ysyxSoC diff > ../ysyxSoC.patch`.
 
-Build and run the zero-patch MROM/UART smoke (a tiny MROM program prints `SOC` through the UART16550, validating both MROM fetch with icache burst refill and the AXI-to-APB MMIO store path):
+Build and run the MROM/UART smoke (a tiny MROM program prints `SOC` through the UART16550, validating both MROM fetch with icache burst refill and the AXI-to-APB MMIO store path):
 
 ```sh
 make -C npc soc-smoke
 ```
 
-The smoke terminates by cycle limit (no debug ports are exposed at the SoC top yet); pass/fail comes from the RTL-printed UART bytes plus the structured line:
+Run the SoC icache/DiffTest smoke and the lecture-note-style SRAM memory test:
 
-```text
-NPC_SOC_RESULT status=limit reason=cycle_limit cycles=2000 limit=2000 mrom_reads=12
+```sh
+make -C npc test-soc-difftest REF_SO=/path/to/nemu/build/riscv32-nemu-interpreter-so
+make -C npc test-soc-mem REF_SO=/path/to/nemu/build/riscv32-nemu-interpreter-so
 ```
 
-The SoC harness (`npc/csrc/soc_main.cpp`) provides the `mrom_read()` DPI (image loaded at `0x20000000`) and an `assert(0)` `flash_read()` stub, and supports `--image`, `--max-cycles`, and `--wave` (build with `TRACE=1`). The SoC build passes `--autoflush` so the UART16550's single-character `$write` output is flushed immediately instead of sitting in the stdio buffer (important if the sim is killed or stops on an RTL `$fatal` before exit). Note: ysyxSoC delays the CPU reset through a 10-stage `SynchronizerShiftReg`, so the harness holds reset for 20 cycles; a shorter reset re-appears as a spurious mid-run reset pulse.
+`test-soc-mem` boots from MROM at `0x20000000`, verifies the 8KB SRAM window at `0x0f000000..0x0f001fff` with word fill/readback, byte/halfword `wstrb`, narrow loads/stores, read-after-write checks, and sign-extension checks, prints `PASS`, and terminates with a good trap under DiffTest.
+
+Run AM `dummy`/`hello` on the SoC through the `riscv32e-ysyxsoc` platform:
+
+```sh
+make -C am-kernels/kernels/hello ARCH=riscv32e-ysyxsoc \
+  AM_HOME=/path/to/abstract-machine CROSS_COMPILE=riscv64-elf- \
+  NPC_DIFFTEST_REF=/path/to/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+The SoC harness (`npc/csrc/soc_main.cpp`) provides the `mrom_read()` DPI (image loaded at `0x20000000`) and an `assert(0)` `flash_read()` stub, and supports `--image`, `--reset-pc`, `--max-cycles`, `--difftest-ref`, and `--wave` (build with `TRACE=1`). The SoC build passes `--autoflush` so the UART16550's single-character `$write` output is flushed immediately instead of sitting in the stdio buffer (important if the sim is killed or stops on an RTL `$fatal` before exit). Note: ysyxSoC delays the CPU reset through a 10-stage `SynchronizerShiftReg`, so the harness holds reset for 20 cycles; a shorter reset re-appears as a spurious mid-run reset pulse.
 
 For AXI-level debugging, building the SoC flavor with `+define+NPC_TRACE_AXI` (add to `SOC_VERILATOR_FLAGS`) enables `$display` probes in `rtl/bus/AxiMaster.v` that log every AR/R/W/B channel event.
 

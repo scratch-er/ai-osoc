@@ -767,10 +767,11 @@ Sessions:
    - Stretch not done: data-segment bootloader (VMA/LMA copy) for broader cpu-tests with writable globals.
    - Exit status: `dummy` and `hello` pass with `NEMU_RESULT status=good` and `NPC_RESULT status=good`; `hello` prints the full `Hello, AbstractMachine!` and `mainargs = ''.` text through UART16550.
 
-6. **P9-S6: Phase 9 regression and closeout**
-   - Re-run the full existing regression (NPC directed tests, 35 cpu-tests with DiffTest, `hello`, CTE smokes, RT-Thread smoke) to prove the SoC work did not regress local flows.
-   - Record exact SoC commands/results, known limitations (PSRAM/SDRAM stub windows, no flash XIP, no GPIO/PS2/VGA), and the patch workflow in `notes/next.md`; update `npc/README.md` for the new build flavor.
-   - Exit when a new session can reproduce the SoC integration from notes alone.
+6. **P9-S6: Phase 9 regression and closeout** — completed
+   - Re-ran the full existing regression on macOS: SoC directed tests, standalone NPC directed tests, all 35 `cpu-tests` with NEMU event DiffTest, `hello`, bounded AM timer/devscan, bounded CTE smokes, RT-Thread scripted `halt`, and AM `riscv32e-ysyxsoc` `dummy`/`hello`.
+   - Confirmed the mem-test-style SoC SRAM validation still passes with DiffTest: full 8KB word fill/readback, byte/halfword `wstrb`, narrow loads/stores, read-after-write, and sign-extension checks.
+   - Updated `notes/next.md` and `npc/README.md` with current SoC commands/results, known limitations, and the `ysyxSoC.patch` workflow.
+   - Exit status: Phase 9 is closed; AXI MROM fetch/refill, SRAM load/store, and UART16550 MMIO output paths are validated before entering Phase 10.
 
 Exit criteria:
 
