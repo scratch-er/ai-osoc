@@ -32,6 +32,7 @@ constexpr uint32_t MROM_SIZE = 0x1000u;  // 4KB AXI4MROM window
 constexpr uint32_t DEFAULT_RESET_PC = 0x20000000u;
 constexpr uint32_t EBREAK_INST = 0x00100073u;
 constexpr uint32_t UART_BASE = 0x10000000u;
+constexpr uint32_t UART_END = 0x10000020u;
 constexpr uint32_t CLINT_BASE = 0x02000000u;
 constexpr uint32_t CLINT_END = 0x02010000u;
 
@@ -148,26 +149,43 @@ uint32_t debug_reg(const VysyxSoCTop &top, int idx) {
   return top.io_debug_regs_flat[idx];
 }
 
+bool is_uart_addr(uint32_t addr) {
+  return addr >= UART_BASE && addr < UART_END;
+}
+
 bool is_clint_addr(uint32_t addr) {
   return addr >= CLINT_BASE && addr < CLINT_END;
 }
 
 bool is_mmio_addr(uint32_t addr) {
-  return addr == UART_BASE || is_clint_addr(addr);
+  return is_uart_addr(addr) || is_clint_addr(addr);
 }
 
-uint8_t low_contiguous_len(uint8_t wmask) {
-  uint8_t len = 0;
-  for (int i = 0; i < 4 && ((wmask >> i) & 1u); i++) {
-    len++;
-  }
-  return len == 0 ? 4 : len;
+uint32_t sign_extend(uint32_t value, int bits) {
+  uint32_t sign = 1u << (bits - 1);
+  return (value ^ sign) - sign;
 }
 
 uint8_t load_len_from_inst(uint32_t inst) {
   uint32_t funct3 = (inst >> 12) & 0x7u;
   return (funct3 == 0u || funct3 == 4u) ? 1 :
          (funct3 == 1u || funct3 == 5u) ? 2 : 4;
+}
+
+uint8_t store_len_from_wmask(uint8_t wmask) {
+  return (wmask == 0xfu) ? 4 : ((wmask & (wmask - 1)) == 0 ? 1 : 2);
+}
+
+uint32_t load_addr_from_inst(const VysyxSoCTop &top, uint32_t inst) {
+  uint32_t rs1 = (inst >> 15) & 0x1fu;
+  uint32_t imm = sign_extend(inst >> 20, 12);
+  return debug_reg(top, rs1) + imm;
+}
+
+uint32_t store_addr_from_inst(const VysyxSoCTop &top, uint32_t inst) {
+  uint32_t rs1 = (inst >> 15) & 0x1fu;
+  uint32_t imm = ((inst >> 7) & 0x1fu) | (((inst >> 25) & 0x7fu) << 5);
+  return debug_reg(top, rs1) + sign_extend(imm, 12);
 }
 
 CommitEvent make_event(const VysyxSoCTop &top, uint64_t retire, uint64_t cycle) {
@@ -188,17 +206,25 @@ CommitEvent make_event(const VysyxSoCTop &top, uint64_t retire, uint64_t cycle) 
 MMIOReplayRecord make_mmio_record(const VysyxSoCTop &top) {
   bool wen = top.io_debug_commit_mem_wen;
   bool ren = top.io_debug_commit_mem_ren;
-  uint32_t addr = top.io_debug_commit_mem_addr;
   uint32_t wdata = top.io_debug_commit_mem_wdata;
   uint8_t wmask = static_cast<uint8_t>(top.io_debug_commit_mem_wmask & 0xfu);
   uint32_t rdata = top.io_debug_commit_mem_rdata;
   uint32_t inst = top.io_debug_commit_inst;
 
-  if (wen && is_mmio_addr(addr)) {
-    return {true, true, addr, low_contiguous_len(wmask), wmask, wdata, 0};
+  if (wen) {
+    uint32_t true_addr = store_addr_from_inst(top, inst);
+    if (is_mmio_addr(true_addr)) {
+      uint8_t len = store_len_from_wmask(wmask);
+      uint32_t mask = len == 4 ? 0xffffffffu : ((1u << (len * 8u)) - 1u);
+      uint32_t true_wdata = (wdata >> ((true_addr & 0x3u) * 8u)) & mask;
+      return {true, true, true_addr, len, wmask, true_wdata, 0};
+    }
   }
-  if (ren && is_clint_addr(addr)) {
-    return {true, false, addr, load_len_from_inst(inst), 0, 0, rdata};
+  if (ren) {
+    uint32_t true_addr = load_addr_from_inst(top, inst);
+    if (is_mmio_addr(true_addr)) {
+      return {true, false, true_addr, load_len_from_inst(inst), 0, 0, rdata};
+    }
   }
   return {};
 }

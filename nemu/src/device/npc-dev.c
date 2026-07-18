@@ -18,6 +18,7 @@
 #include <utils.h>
 
 #define NPC_UART_BASE  0x10000000u
+#define NPC_UART_SIZE  0x20u
 #define NPC_CLINT_BASE 0x02000000u
 #define NPC_CLINT_SIZE 0x00010000u
 #define NPC_CLINT_MSIP     0x0000u
@@ -78,23 +79,26 @@ static void consume_replay(void) {
 }
 
 static void npc_uart_io_handler(uint32_t offset, int len, bool is_write) {
-  assert(offset == 0 && len == 1);
+  assert(offset < NPC_UART_SIZE && offset + len <= NPC_UART_SIZE);
+  uint32_t addr = NPC_UART_BASE + offset;
   if (is_write) {
-    uint32_t data = npc_uart_base[0];
-    if (replay_matches(NPC_UART_BASE + offset, len, true, data)) {
+    uint32_t data = load_le(npc_uart_base + offset, len);
+    if (replay_matches(addr, len, true, data)) {
       consume_replay();
       return;
     }
 #ifndef CONFIG_TARGET_SHARE
-    putc(data & 0xff, stderr);
+    if (offset == 0 && len == 1) {
+      putc(data & 0xff, stderr);
+    }
 #endif
   } else {
-    if (replay_matches(NPC_UART_BASE + offset, len, false, 0)) {
-      npc_uart_base[0] = mmio_replay.rdata;
+    if (replay_matches(addr, len, false, 0)) {
+      store_le(npc_uart_base + offset, len, mmio_replay.rdata);
       consume_replay();
       return;
     }
-    npc_uart_base[0] = 0;
+    memset(npc_uart_base + offset, 0, len);
   }
 }
 
@@ -164,8 +168,8 @@ bool npc_mmio_replay_ok(void) {
 }
 
 void init_npc_devices() {
-  npc_uart_base = new_space(1);
-  add_mmio_map("npc-uart", NPC_UART_BASE, npc_uart_base, 1, npc_uart_io_handler);
+  npc_uart_base = new_space(NPC_UART_SIZE);
+  add_mmio_map("npc-uart", NPC_UART_BASE, npc_uart_base, NPC_UART_SIZE, npc_uart_io_handler);
 
   npc_clint_base = new_space(NPC_CLINT_SIZE);
   add_mmio_map("npc-clint", NPC_CLINT_BASE, npc_clint_base, NPC_CLINT_SIZE, npc_clint_io_handler);

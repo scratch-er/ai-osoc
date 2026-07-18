@@ -21,6 +21,8 @@ module Lsu (
 );
 
   wire [31:0] aligned_addr = {addr[31:2], 2'b00};
+  wire        is_uart_mmio = (addr[31:16] == 16'h1000);
+  wire [31:0] bus_req_addr = is_uart_mmio ? addr : aligned_addr;
   wire [31:0] raw_rdata = bus_ready ? bus_rdata : 32'd0;
   wire [4:0]  byte_shift = {addr[1:0], 3'b000};
   wire [31:0] shifted_rdata = raw_rdata >> byte_shift;
@@ -35,7 +37,7 @@ module Lsu (
 
   assign bus_valid = ren || wen;
   assign bus_write = wen;
-  assign bus_addr = aligned_addr;
+  assign bus_addr = bus_req_addr;
   assign bus_wdata = store_wdata;
   assign bus_wmask = wmask;
   assign rdata = (size == `NPC_MEM_BYTE) ? (load_unsigned ? {24'd0, load_byte} : {{24{load_byte[7]}}, load_byte}) :

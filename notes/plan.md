@@ -760,11 +760,12 @@ Sessions:
    - Cover `wstrb` behavior, narrow transfers, and repeated read-after-write patterns; run with DiffTest.
    - Exit when the mem-test passes on the SoC sim and the existing directed NPC regressions still pass.
 
-5. **P9-S5: AM `riscv32e-ysyxsoc` runtime and `hello`/`dummy` on SoC**
-   - Add a minimal AM platform: linker script (text/rodata in MROM, data/stack/heap in SRAM), startup, `putch()` with UART16550 divisor init and LSR THRE polling, `halt()` via `ebreak`, and a one-command run path.
-   - Run `cpu-tests/dummy` and `hello` on the SoC sim with DiffTest.
-   - Stretch (not required for phase exit): data-segment bootloader (VMA/LMA copy) enabling cpu-tests with writable globals.
-   - Exit when `dummy` and `hello` pass with correct UART output.
+5. **P9-S5: AM `riscv32e-ysyxsoc` runtime and `hello`/`dummy` on SoC** — completed
+   - Added a minimal AM platform with text/rodata in MROM, stack/heap in SRAM, UART16550 `putch()` with divisor init and LSR THRE polling, `halt()` via `ebreak`, and a one-command run path through the SoC simulator.
+   - Ran `cpu-tests/dummy` and `hello` on the SoC sim with DiffTest.
+   - Fixed the core/SoC UART16550 narrow-MMIO path exposed by `hello`: LSU now preserves UART byte-register address low bits, AXI writes/reads use byte-sized transfers for UART MMIO, and NEMU/MMIO replay covers the UART16550 register window.
+   - Stretch not done: data-segment bootloader (VMA/LMA copy) for broader cpu-tests with writable globals.
+   - Exit status: `dummy` and `hello` pass with `NEMU_RESULT status=good` and `NPC_RESULT status=good`; `hello` prints the full `Hello, AbstractMachine!` and `mainargs = ''.` text through UART16550.
 
 6. **P9-S6: Phase 9 regression and closeout**
    - Re-run the full existing regression (NPC directed tests, 35 cpu-tests with DiffTest, `hello`, CTE smokes, RT-Thread smoke) to prove the SoC work did not regress local flows.

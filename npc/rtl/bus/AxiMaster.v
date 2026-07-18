@@ -77,7 +77,8 @@ module AxiMaster (
   assign axi_awaddr = addr_q;
   assign axi_awid = 4'd0;
   assign axi_awlen = 8'd0;
-  assign axi_awsize = 3'b010;
+  assign axi_awsize = (addr_q[1:0] == 2'b00 && wmask_q == 4'b1111) ? 3'b010 :
+                      (addr_q[0] == 1'b0 && (wmask_q == 4'b0011 || wmask_q == 4'b1100)) ? 3'b001 : 3'b000;
   assign axi_awburst = 2'b01;
   assign axi_wvalid = state == S_WRITE_REQ && !w_done;
   assign axi_wdata = wdata_q;
@@ -89,7 +90,7 @@ module AxiMaster (
   assign axi_araddr = addr_q;
   assign axi_arid = 4'd0;
   assign axi_arlen = len_q;
-  assign axi_arsize = 3'b010;
+  assign axi_arsize = (addr_q[31:16] == 16'h1000) ? 3'b000 : 3'b010;
   assign axi_arburst = 2'b01;
   assign axi_rready = state == S_READ_DATA;
 

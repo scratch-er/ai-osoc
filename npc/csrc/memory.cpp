@@ -5,6 +5,7 @@
 
 namespace {
 constexpr uint32_t UART_BASE = 0x10000000u;
+constexpr uint32_t UART_END = 0x10000020u;
 constexpr uint32_t CLINT_BASE = 0x02000000u;
 constexpr uint32_t CLINT_END = 0x02010000u;
 constexpr uint32_t CLINT_MTIME = CLINT_BASE + 0xbff8u;
@@ -45,7 +46,7 @@ bool Memory::contains(uint32_t addr, uint32_t len) const {
 }
 
 bool Memory::access_ok(uint32_t addr) const {
-  return contains(addr, 4) || addr == UART_BASE || (addr >= CLINT_BASE && addr < CLINT_END);
+  return contains(addr, 4) || (addr >= UART_BASE && addr < UART_END) || (addr >= CLINT_BASE && addr < CLINT_END);
 }
 
 bool Memory::load_image(const std::string &path) {
@@ -138,7 +139,7 @@ uint32_t Memory::read32(uint32_t addr) {
 }
 
 void Memory::write32(uint32_t addr, uint32_t data, uint8_t wmask) {
-  if (addr == UART_BASE || (addr >= CLINT_BASE && addr < CLINT_END)) {
+  if ((addr >= UART_BASE && addr < UART_END) || (addr >= CLINT_BASE && addr < CLINT_END)) {
     mmio_record_ = {true, true, addr, mask_len(wmask), static_cast<uint8_t>(wmask & 0xf), data, 0};
 #if !NPC_DEBUG
     if (addr == UART_BASE && (wmask & 0x1) != 0) {

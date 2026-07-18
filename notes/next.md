@@ -12,7 +12,7 @@ Current state:
   - `84d258d Validate physical CLINT workloads`
 - Phase 7 (`Instruction Cache and fence.i`) is complete through `P7-S3: Linux migration, final exit check, and Phase 8 preparation`.
 - Phase 8 (`Linux PPA, Optimization, and Spec-Interface Readiness`) is complete through `P8-S3: Closing P8` (validated on Linux; not yet committed — ask the user before any git commit).
-- **Phase 9 was re-planned per user request:** connecting to ysyxSoC (deferred since Phase 5) is now the new `Phase 9: ysyxSoC Integration and AXI Validation` in `notes/plan.md`; the optional pipeline phase became Phase 10 and final integration became Phase 11. `P9-S1`, `P9-S2`, and `P9-S3: Debug/commit exposure patch and DiffTest restoration` are complete on the macOS host (see the P9-S1/P9-S2/P9-S3 sections below). Next session: decide whether to continue with P9-S4 (SoC workload regression: cpu-tests, RT-Thread-am, CLINT timer via the SoC) or move to Phase 10.
+- **Phase 9 was re-planned per user request:** connecting to ysyxSoC (deferred since Phase 5) is now the new `Phase 9: ysyxSoC Integration and AXI Validation` in `notes/plan.md`; the optional pipeline phase became Phase 10 and final integration became Phase 11. `P9-S1` through `P9-S5: AM riscv32e-ysyxsoc runtime and hello/dummy on SoC` are complete on the macOS host. Next session: run `P9-S6: Phase 9 regression and closeout`.
 - Do not modify `AGENTS.md` — it is project-supplied and owned by the user. Record project conventions (such as the `ysyxSoC.patch` workflow) in `notes/` only; the user explicitly reverted an `AGENTS.md` edit for this.
 - The project must remain portable across macOS and Linux. At the start of each future session, detect the current platform and choose commands/toolchain settings from the matching platform note; do not assume either macOS or Linux globally.
 - Platform notes were split out:
@@ -781,11 +781,35 @@ Open caveats:
 - NEMU `.config` still has `# CONFIG_RVE is not set`; keep SoC DiffTest programs inside `x0..x15` until this is fixed.
 - The SoC mem-test writes UART bytes one at a time with `sb` because the NEMU NPC-UART replay window is a single byte at `0x10000000`.
 
+## Phase 9 Session 5 status
+
+`P9-S5: AM riscv32e-ysyxsoc runtime and hello/dummy on SoC` is complete on the macOS host.
+
+What was added/fixed:
+
+- `abstract-machine/scripts/riscv32e-ysyxsoc.mk`, `abstract-machine/scripts/platform/ysyxsoc.mk`, `abstract-machine/scripts/ysyxsoc-linker.ld`, and `abstract-machine/am/src/riscv/ysyxsoc/trm.c`: minimal AM platform for ysyxSoC. Text/rodata live in MROM at `0x20000000`; stack/heap live in SRAM at `0x0f000000..0x0f001fff`; `putch()` initializes UART16550 divisor/FIFO/LCR and polls LSR THRE before writing THR; `halt()` exits through `ebreak`.
+- `npc/rtl/core/Lsu.v` and `npc/rtl/bus/AxiMaster.v`: preserve UART16550 byte-register low address bits and issue byte-sized UART reads / byte- or halfword-/word-sized UART writes so UART DLL/DLM/FCR/LCR/LSR accesses reach the correct SoC peripheral offsets.
+- `npc/csrc/soc_main.cpp`: reconstruct the true MMIO address from the retired load/store instruction and debug register state for DiffTest replay, because the committed bus address may be aligned in local paths and UART byte registers need exact offsets.
+- `npc/csrc/memory.cpp`, `nemu/src/device/npc-dev.c`, and `nemu/src/memory/vaddr.c`: extend the NPC UART MMIO window/replay from one byte at `0x10000000` to the UART16550 register window `0x10000000..0x1000001f`.
+
+Validation run before commit:
+
+- `make -C npc soc-smoke test-soc-difftest test-soc-mem` passes. Representative final lines: `SOC` smoke reaches `NPC_RESULT status=limit reason=cycle_limit cycles=2000`; icache SoC DiffTest reaches `NEMU_RESULT status=good` and `NPC_RESULT status=good reason=good_trap cycles=65 insts=19 pc=0x20000010`; SoC SRAM mem-test prints `PASS` and reaches `NPC_RESULT status=good reason=good_trap cycles=98719 insts=26702 pc=0x20000198`.
+- Local NPC regression command passes: `make -C npc smoke spec-smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-csr-trap test-rv32e-illegal test-difftest test-clint test-icache test-fencei test-debug test-axi-local test-access-fault`. Note `test-debug` intentionally includes bounded step/breakpoint outputs; the overall make command exited 0.
+- AM SoC `dummy` passes with DiffTest using the macOS-compatible temporary Makefile wrapper and `CROSS_COMPILE=riscv64-elf-`: `NEMU_RESULT status=good state=2 halt_pc=0x20000060 halt_ret=0 insts=25` and `NPC_RESULT status=good reason=good_trap cycles=162 insts=25 pc=0x20000060`.
+- AM SoC `hello` passes with DiffTest: `Hello, AbstractMachine!` and `mainargs = ''.` are printed through UART16550, followed by `NEMU_RESULT status=good state=2 halt_pc=0x20000108 halt_ret=0 insts=1347` and `NPC_RESULT status=good reason=good_trap cycles=6276 insts=1347 pc=0x20000108`.
+
+Open caveats:
+
+- The current AM `riscv32e-ysyxsoc` platform does not implement an LMA-to-VMA data copy boot path; keep broader AM/cpu-tests with writable globals for a later bootloader/data-relocation task.
+- `am-kernels/tests/cpu-tests/Makefile` still uses `/bin/echo -e`, so on macOS use the temporary Makefile/`printf` wrapper for individual cpu-tests.
+- The SoC integration still intentionally ignores PSRAM/SDRAM/flash XIP/GPIO/PS2/VGA/ChipLink.
+
 ## Next steps
 
-1. Continue Phase 9 with `P9-S5` (AM `riscv32e-ysyxsoc` runtime and `dummy`/`hello` on the SoC) or jump to `P9-S6` (full regression/closeout) if the user wants to defer the AM SoC port. Persist the current state with a git commit before the next session starts.
+1. Run `P9-S6: Phase 9 regression and closeout`: full existing regression (NPC directed tests, 35 cpu-tests with DiffTest, `hello`, CTE smokes, RT-Thread smoke) and update final Phase 9 notes/README details if needed.
 2. Never commit inside the `ysyxSoC` submodule; keep tracked-source debug changes as `ysyxSoC.patch` at the repo root (regenerate: `git -C ysyxSoC diff > ../ysyxSoC.patch`; apply on fresh checkouts: `git -C ysyxSoC apply ../ysyxSoC.patch`). Note this diff does not cover the nested `rocket-chip` patch — that one is re-applied by `make -C ysyxSoC dev-init` on fresh clones.
-3. P9-S4 adds/updates tracked files: `npc/tests/make-soc-mem-bin.py`, `npc/Makefile`, `npc/csrc/main.cpp`, and notes.
+3. P9-S5 adds/updates tracked files: `abstract-machine/am/src/riscv/ysyxsoc/trm.c`, `abstract-machine/scripts/platform/ysyxsoc.mk`, `abstract-machine/scripts/riscv32e-ysyxsoc.mk`, `abstract-machine/scripts/ysyxsoc-linker.ld`, `npc/rtl/core/Lsu.v`, `npc/rtl/bus/AxiMaster.v`, `npc/csrc/soc_main.cpp`, `npc/csrc/memory.cpp`, `nemu/src/device/npc-dev.c`, `nemu/src/memory/vaddr.c`, and notes.
 4. Keep the STA caveat in mind: current timing is standalone core-top STA with only a core clock constraint; no SoC AXI input/output delays are modeled yet.
 
 ## Phase 9 planning facts (verified on the macOS host; re-verify on Linux)
