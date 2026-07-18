@@ -13,7 +13,7 @@ Current state:
 - Phase 7 (`Instruction Cache and fence.i`) is complete through `P7-S3: Linux migration, final exit check, and Phase 8 preparation`.
 - Phase 8 (`Linux PPA, Optimization, and Spec-Interface Readiness`) is complete through `P8-S3: Closing P8` (validated on Linux; not yet committed — ask the user before any git commit).
 - Phase 9 (`ysyxSoC Integration and AXI Validation`) is closed through `P9-S6: Phase 9 regression and closeout`.
-- Phase 10 (`Pipeline and Targeted Performance Design`) has been planned per user request. The selected design is a justified 3-stage elastic in-order pipeline (`F/X/C`), based on `specs/core.md` and the P8-S3 STA report under `build/p8-s3-close/rerun-sta-20260718`; do not switch to a classic 5-stage or 4-stage design unless measurements after the 3-stage implementation justify it. Phase 10 is organized as four sessions: design (this session), implement and smoke test, optimize timing and area, final test and close. Next implementation session: start `P10-S2: Implement and smoke test`.
+- Phase 10 (`Pipeline and Targeted Performance Design`) is complete through `P10-S2: Implement and smoke test` on macOS. `npc/rtl/core/Core.v` now implements the selected 3-stage elastic in-order pipeline (`F/X/C`). Per user request, this session did not connect to ysyxSoC and did not run STA. Do not commit yet; the user wants to revise and make the commit.
 - Do not modify `AGENTS.md` — it is project-supplied and owned by the user. Record project conventions (such as the `ysyxSoC.patch` workflow) in `notes/` only; the user explicitly reverted an `AGENTS.md` edit for this.
 - The project must remain portable across macOS and Linux. At the start of each future session, detect the current platform and choose commands/toolchain settings from the matching platform note; do not assume either macOS or Linux globally.
 - Platform notes were split out:
@@ -894,14 +894,85 @@ Phase 10 has been planned from the spec and current STA evidence. Key facts to p
   - 4-stage `F/D/X/C`: more timing margin but more forwarding/flush/branch-penalty/area complexity.
   - Minimal writeback retiming: lower risk but likely does not improve CPI because it still does not overlap fetch and execute.
 
+## Phase 10 Session 2 status
+
+`P10-S2: Implement and smoke test` is complete on the macOS host (`CROSS_COMPILE=riscv64-elf-`). Per user request, this session intentionally skipped ysyxSoC connection tests and STA/PPA.
+
+What changed:
+
+- `npc/rtl/core/Core.v` was refactored from the previous single-instruction `inst_q/inst_valid` controller into explicit `F/X` and `X/C` pipeline state while keeping the `Core` port list and existing submodule interfaces stable.
+- F stage now owns `f_pc`, uses the existing `Ifu` as the fetch/cache producer, captures `{pc, inst, inst_error}` into `F/X`, and flushes/drops younger fetch responses on C-stage redirects.
+- X stage decodes, reads the async `RegFile`, applies C-to-X forwarding, computes branch/JAL/JALR targets, ALU result, LSU address/store data, CSR read data, and preliminary legality/exception metadata.
+- C stage waits for LSU/CLINT/AXI memory completion, performs the single architectural update point (regfile writeback, CSR commit/trap update, `fence.i` invalidation, redirect, halt/trap status, and `commit_*` reporting), and backpressures younger stages while stalled.
+- Conservative load-use stalling is implemented while C holds an incomplete load. C-to-X forwarding covers pending non-load writes and loads once the C-stage data is ready.
+- `npc/Makefile` `test-debug` was updated for the new pipeline's startup/redirect timing: the scripted 2-retire debug checkpoints now use `run 10` / `--max-cycles 10` instead of the old single-instruction-controller 8-cycle assumption. Functional expectations are unchanged.
+
+Validation completed:
+
+1. P10-S2 directed and local standalone regression passed:
+
+```sh
+make -C npc smoke spec-smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
+  test-mem-size test-rv32e-illegal test-csr-trap test-access-fault \
+  test-clint test-icache test-fencei test-debug test-difftest test-axi-local
+```
+
+Representative results:
+
+- `spec-smoke`: printed `SPEC`, `NPC_RESULT status=good reason=uart_eot cycles=54 insts=13`.
+- `test-jalr-ebreak`: `NPC_RESULT status=good reason=good_trap cycles=27 insts=5 pc=0x00000120 x1=0x00000102`.
+- `test-lw-sw`: `NPC_RESULT status=good reason=good_trap cycles=24 insts=5 x1=0x0000002a`.
+- `test-clint`: `NPC_RESULT status=good reason=good_trap cycles=64 insts=19`, with DiffTest enabled and `NPC_ICACHE accesses=19 hits=14 misses=5`.
+- `test-icache`: `NPC_RESULT status=good reason=good_trap cycles=56 insts=19`, `NPC_ICACHE accesses=19 hits=17 misses=2`.
+- `test-fencei`: `NPC_RESULT status=good reason=good_trap cycles=49 insts=9`, `NPC_ICACHE accesses=9 hits=4 misses=5`.
+
+2. AM `hello` passed with NEMU event DiffTest:
+
+```sh
+make -C am-kernels/kernels/hello ARCH=riscv32e-npc \
+  AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=2000000 \
+  NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+Output contained `Hello, AbstractMachine!` and `mainargs = ''.`; final lines included `NEMU_RESULT status=good ... insts=465` and `NPC_RESULT status=good reason=good_trap cycles=1985 insts=465 pc=0x800000c4`.
+
+3. Full 35-test `cpu-tests` sweep passed with NEMU event DiffTest using the portable temporary-Makefile loop:
+
+`add`, `add-longlong`, `bit`, `bubble-sort`, `crc32`, `div`, `dummy`, `fact`, `fib`, `goldbach`, `hello-str`, `if-else`, `leap-year`, `load-store`, `matrix-mul`, `max`, `mersenne`, `min3`, `mov-c`, `movsx`, `mul-longlong`, `narcissistic`, `pascal`, `prime`, `quick-sort`, `recursion`, `select-sort`, `shift`, `string`, `sub-longlong`, `sum`, `switch`, `to-lower-case`, `unalign`, `wanshu`.
+
+Representative P10-S2 cycles vs P8-S3 baseline:
+
+- `sum`: `cycles=1423`, `insts=528` (P8-S3 baseline `1532`).
+- `string`: `cycles=3999`, `insts=1449` (P8-S3 baseline `4260`).
+- `crc32`: `cycles=62105`, `insts=18163` (P8-S3 baseline `67892`).
+- `quick-sort`: `cycles=11126`, `insts=3041` (P8-S3 baseline `11854`).
+- `matrix-mul`: `cycles=519625`, `insts=131726` (P8-S3 baseline `543774`).
+
+4. RT-Thread scripted shell `halt` passed with NEMU event DiffTest:
+
+```sh
+make -C rt-thread-am/bsp/abstract-machine ARCH=riscv32e-npc \
+  AM_HOME=/Users/venti/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-elf- NPC_MAX_CYCLES=12000000 \
+  NPC_DIFFTEST_REF=/Users/venti/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+Final lines included `NEMU_RESULT status=good state=2 halt_pc=0x8000022c halt_ret=0 insts=511842` and `NPC_RESULT status=good reason=good_trap cycles=1724877 insts=511842 pc=0x8001f718`; `NPC_ICACHE accesses=511842 hits=428931 misses=82911 hit_rate_x1000=838 amat_x1000=2019`.
+
+Current working tree notes:
+
+- Intended source changes from this session: `npc/rtl/core/Core.v`, `npc/Makefile`, and `notes/next.md` / `notes/plan.md` if updated.
+- `ysyxSoC` still appears modified as a submodule from previous P9 work; do not commit inside it and keep using the root `ysyxSoC.patch` workflow.
+- Top-level untracked `kimi-debug-session_-20260718-152953.zip` and `kimi-export-session_-20260718-152956.md` are user/session artifacts; leave them alone unless the user explicitly asks.
+
 ## Next steps
 
-1. This session is `P10-S1: Design and baseline capture`; continue with `P10-S2: Implement and smoke test` from the detailed Phase 10 section in `notes/plan.md`.
-2. Before RTL changes, preserve the Phase 9 correctness suite above as the regression baseline, especially `test-soc-mem`, `test-soc-difftest`, 35 `cpu-tests`, `hello`, RT-Thread, and the P8-S3 STA/PPA data.
-3. Implement only the selected 3-stage `F/X/C` approach unless new measurements justify revising the plan with the user.
-4. P10-S3 is explicitly for optimizing both timing and area; do not optimize Fmax while ignoring area/reg-count/CPI.
-5. P10-S4 is final full regression and closeout.
-6. Do not commit inside the `ysyxSoC` submodule. Keep using the root `ysyxSoC.patch` workflow for SoC debug/commit exposure.
+1. Let the user revise the P10-S2 changes, then the user will make the commit. Do not commit automatically.
+2. If continuing to `P10-S3`, run physical STA/PPA on the Linux toolchain and compare against the P8-S3 baseline (`area=22685.320000`, sequential area `8001.840000`, `1299` DFFs, 610 MHz pass / 620 MHz fail).
+3. In P10-S3, optimize only from measurements: possible knobs are IFU hit path, C-stage regfile write-enable/data fanout, branch redirect penalty, load-result forwarding, and X/C packet bit trimming. Track area/reg-count/CPI alongside Fmax.
+4. P10-S4 remains final full regression and closeout, including SoC `test-soc-difftest`, `test-soc-mem`, and AM `riscv32e-ysyxsoc` `dummy`/`hello` that were intentionally skipped in this P10-S2 session.
+5. Do not commit inside the `ysyxSoC` submodule. Keep using the root `ysyxSoC.patch` workflow for SoC debug/commit exposure.
 
 ## Phase 9 planning facts (verified on the macOS host; re-verify on Linux)
 

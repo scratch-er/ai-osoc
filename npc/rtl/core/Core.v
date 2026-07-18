@@ -70,15 +70,47 @@ module Core #(
 
   wire [31:0] reset_vector = (reset_pc == 32'd0) ? RESET_PC : reset_pc;
 
-  reg [31:0] pc;
   reg        halted;
   reg [1:0]  trap_status;
-  reg [31:0] inst_q;
-  reg        inst_valid;
-  reg        inst_error;
 
-  wire [31:0] fetch_pc = reset ? reset_vector : pc;
-  wire [31:0] inst = inst_q;
+  reg [31:0] f_pc;
+  reg        ifu_pending;
+  reg        drop_fetch_response;
+
+  reg        fx_valid;
+  reg [31:0] fx_pc;
+  reg [31:0] fx_inst;
+  reg        fx_inst_error;
+
+  reg        xc_valid;
+  reg [31:0] xc_pc;
+  reg [31:0] xc_inst;
+  reg        xc_inst_error;
+  reg [4:0]  xc_rd;
+  reg        xc_writes_rd;
+  reg [1:0]  xc_wb_sel;
+  reg        xc_mem_ren;
+  reg        xc_mem_wen;
+  reg [1:0]  xc_mem_size;
+  reg        xc_mem_unsigned;
+  reg [2:0]  xc_csr_cmd;
+  reg [11:0] xc_csr_addr;
+  reg [4:0]  xc_csr_uimm;
+  reg [31:0] xc_csr_rdata;
+  reg [31:0] xc_rs1_data;
+  reg [31:0] xc_rs2_data;
+  reg [31:0] xc_alu_result;
+  reg [31:0] xc_lsu_addr;
+  reg [31:0] xc_pc_plus_4;
+  reg [31:0] xc_normal_next_pc;
+  reg        xc_is_mret;
+  reg        xc_is_fence_i;
+  reg        xc_decode_legal;
+  reg        xc_pc_exception;
+  reg        xc_mem_misaligned;
+  reg        xc_is_ecall;
+  reg        xc_is_ebreak;
+
   wire [6:0]  opcode;
   wire [4:0]  rd;
   wire [2:0]  funct3;
@@ -110,12 +142,21 @@ module Core #(
   wire        is_jal;
   wire        is_jalr;
   wire        is_legal;
-  wire [31:0] rs1_data;
-  wire [31:0] rs2_data;
+
+  wire [31:0] rf_rs1_data;
+  wire [31:0] rf_rs2_data;
+  wire [31:0] x_rs1_data;
+  wire [31:0] x_rs2_data;
+  wire [31:0] x_pc;
+  wire [31:0] x_inst;
+  wire        x_inst_error;
+  wire        x_valid;
+  wire        x_direct_valid;
   wire [31:0] imm_data;
   wire [31:0] alu_src1;
   wire [31:0] alu_src2;
   wire [31:0] alu_result;
+
   wire        ifu_bus_valid;
   wire [31:0] ifu_bus_addr;
   wire [7:0]  ifu_bus_len;
@@ -125,8 +166,7 @@ module Core #(
   wire        ifu_inst_ready;
   wire [31:0] ifu_inst;
   wire        ifu_inst_error;
-  wire        ifu_invalidate;
-  wire [31:0] lsu_addr;
+
   wire [31:0] lsu_rdata;
   wire [31:0] lsu_write_addr;
   wire [31:0] lsu_write_data;
@@ -156,12 +196,20 @@ module Core #(
   wire        axi_req_ready;
   wire [31:0] axi_req_rdata;
   wire        axi_req_error;
+
   wire [31:0] csr_rdata;
   wire [31:0] mtvec;
   wire [31:0] mepc;
   wire [31:0] mcause;
   wire [31:0] mstatus;
   wire [31:0] wb_data;
+
+  assign x_direct_valid = ifu_pending && ifu_inst_ready && !drop_fetch_response && !fx_valid && !xc_valid && !redirect;
+  assign x_valid = fx_valid || x_direct_valid;
+  assign x_pc = x_direct_valid ? f_pc : fx_pc;
+  assign x_inst = x_direct_valid ? ifu_inst : fx_inst;
+  assign x_inst_error = x_direct_valid ? ifu_inst_error : fx_inst_error;
+
   wire        rd_is_rv32e = rd[4] == 1'b0;
   wire        rs1_is_rv32e = rs1[4] == 1'b0;
   wire        rs2_is_rv32e = rs2[4] == 1'b0;
@@ -169,74 +217,74 @@ module Core #(
   wire        rs1_valid = !reads_rs1 || rs1_is_rv32e;
   wire        rs2_valid = !reads_rs2 || rs2_is_rv32e;
   wire        decode_legal = is_legal && rd_valid && rs1_valid && rs2_valid;
-  wire        mem_half_misaligned = mem_size == `NPC_MEM_HALF && lsu_addr[0] != 1'b0;
-  wire        mem_word_misaligned = mem_size == `NPC_MEM_WORD && lsu_addr[1:0] != 2'b00;
-  wire        mem_misaligned = (mem_ren || mem_wen) && (mem_half_misaligned || mem_word_misaligned);
-  wire        branch_target_misaligned;
-  wire        jal_target_misaligned;
-  wire        jalr_target_misaligned;
-  wire        pc_exception;
-  wire        mem_access_fault;
-  wire [31:0] exception_cause;
-  wire        is_ecall = sys_cmd == `NPC_SYS_ECALL;
-  wire        is_ebreak = sys_cmd == `NPC_SYS_EBREAK;
-  wire        is_mret = sys_cmd == `NPC_SYS_MRET;
-  wire        is_fence_i = sys_cmd == `NPC_SYS_FENCE_I;
-  wire        base_trap_request;
-  wire        trap_request;
-  wire        precise_trap;
-  wire        can_complete_no_mem_fault;
-  wire        complete_inst;
-  wire        mem_access;
-  wire        mem_ready;
-  wire        retire_ready;
-  wire        wb_wen;
-  wire        lsu_wen;
-  wire [31:0] pc_plus_4 = pc + 32'd4;
-  wire        branch_taken = (branch_op == `NPC_BR_BEQ)  ? (rs1_data == rs2_data) :
-                             (branch_op == `NPC_BR_BNE)  ? (rs1_data != rs2_data) :
-                             (branch_op == `NPC_BR_BLT)  ? ($signed(rs1_data) < $signed(rs2_data)) :
-                             (branch_op == `NPC_BR_BGE)  ? ($signed(rs1_data) >= $signed(rs2_data)) :
-                             (branch_op == `NPC_BR_BLTU) ? (rs1_data < rs2_data) :
-                             (branch_op == `NPC_BR_BGEU) ? (rs1_data >= rs2_data) : 1'b0;
-  wire [31:0] jalr_target = (rs1_data + imm_i) & ~32'd1;
-  wire [31:0] jal_target = pc + imm_j;
-  wire [31:0] branch_target = pc + imm_b;
-  wire [31:0] normal_next_pc = is_mret ? mepc : (is_jalr ? jalr_target : (is_jal ? jal_target : (branch_taken ? branch_target : pc_plus_4)));
-  wire [31:0] final_wb_data = wb_data;
-  wire        bad_without_vector;
-`ifdef NPC_DEBUG
-  wire        unused = |{opcode, funct3, funct7, mcause};
-`else
-  wire        unused = |{opcode, funct3, funct7, mcause, mstatus, trap_status,
-                         lsu_write_addr, lsu_write_data, lsu_write_mask};
-`endif
+  wire        x_is_ecall = sys_cmd == `NPC_SYS_ECALL;
+  wire        x_is_ebreak = sys_cmd == `NPC_SYS_EBREAK;
+  wire        x_is_mret = sys_cmd == `NPC_SYS_MRET;
+  wire        x_is_fence_i = sys_cmd == `NPC_SYS_FENCE_I;
+  wire [31:0] x_pc_plus_4 = x_pc + 32'd4;
+  wire        branch_taken = (branch_op == `NPC_BR_BEQ)  ? (x_rs1_data == x_rs2_data) :
+                             (branch_op == `NPC_BR_BNE)  ? (x_rs1_data != x_rs2_data) :
+                             (branch_op == `NPC_BR_BLT)  ? ($signed(x_rs1_data) < $signed(x_rs2_data)) :
+                             (branch_op == `NPC_BR_BGE)  ? ($signed(x_rs1_data) >= $signed(x_rs2_data)) :
+                             (branch_op == `NPC_BR_BLTU) ? (x_rs1_data < x_rs2_data) :
+                             (branch_op == `NPC_BR_BGEU) ? (x_rs1_data >= x_rs2_data) : 1'b0;
+  wire [31:0] jalr_target = (x_rs1_data + imm_i) & ~32'd1;
+  wire [31:0] jal_target = x_pc + imm_j;
+  wire [31:0] branch_target = x_pc + imm_b;
+  wire [31:0] x_normal_next_pc = x_is_mret ? mepc :
+                                  (is_jalr ? jalr_target :
+                                   (is_jal ? jal_target :
+                                    (branch_taken ? branch_target : x_pc_plus_4)));
+  wire [31:0] x_lsu_addr = x_rs1_data + (mem_wen ? imm_s : imm_i);
+  wire        branch_target_misaligned = branch_taken && branch_target[1:0] != 2'b00;
+  wire        jal_target_misaligned = is_jal && jal_target[1:0] != 2'b00;
+  wire        jalr_target_misaligned = is_jalr && jalr_target[1:0] != 2'b00;
+  wire        x_pc_exception = decode_legal && (branch_target_misaligned || jal_target_misaligned || jalr_target_misaligned);
+  wire        x_mem_half_misaligned = mem_size == `NPC_MEM_HALF && x_lsu_addr[0] != 1'b0;
+  wire        x_mem_word_misaligned = mem_size == `NPC_MEM_WORD && x_lsu_addr[1:0] != 2'b00;
+  wire        x_mem_misaligned = (mem_ren || mem_wen) && (x_mem_half_misaligned || x_mem_word_misaligned);
 
-  assign branch_target_misaligned = branch_taken && branch_target[1:0] != 2'b00;
-  assign jal_target_misaligned = is_jal && jal_target[1:0] != 2'b00;
-  assign jalr_target_misaligned = is_jalr && jalr_target[1:0] != 2'b00;
-  assign pc_exception = decode_legal && (branch_target_misaligned || jal_target_misaligned || jalr_target_misaligned);
-  assign base_trap_request = inst_error || !decode_legal || pc_exception || mem_misaligned || is_ecall || is_ebreak;
-  assign can_complete_no_mem_fault = inst_valid && !inst_error && decode_legal && !mem_misaligned && !pc_exception && !is_ecall && !(base_trap_request && mtvec != 32'd0);
-  assign mem_access = can_complete_no_mem_fault && (mem_ren || mem_wen);
-  assign mem_access_fault = mem_access && lsu_raw_ready && lsu_raw_error;
-  assign trap_request = base_trap_request || mem_access_fault;
-  assign precise_trap = trap_request && mtvec != 32'd0;
-  assign bad_without_vector = trap_request && mtvec == 32'd0;
-  assign complete_inst = can_complete_no_mem_fault && !mem_access_fault;
-  assign exception_cause = inst_error ? {27'd0, `NPC_EXC_INST_ACCESS_FAULT} :
-                           !decode_legal ? {27'd0, `NPC_EXC_ILLEGAL_INST} :
-                           pc_exception ? {27'd0, `NPC_EXC_INST_ADDR_MISALIGNED} :
-                           (mem_ren && mem_misaligned) ? {27'd0, `NPC_EXC_LOAD_ADDR_MISALIGNED} :
-                           (mem_wen && mem_misaligned) ? {27'd0, `NPC_EXC_STORE_ADDR_MISALIGNED} :
-                           (mem_ren && mem_access_fault) ? {27'd0, `NPC_EXC_LOAD_ACCESS_FAULT} :
-                           (mem_wen && mem_access_fault) ? {27'd0, `NPC_EXC_STORE_ACCESS_FAULT} :
-                           is_ecall ? {27'd0, `NPC_EXC_ECALL_M} :
-                           is_ebreak ? {27'd0, `NPC_EXC_BREAKPOINT} : 32'd0;
-  assign mem_ready = !mem_access || lsu_raw_ready;
-  assign retire_ready = !reset && !halted && inst_valid && mem_ready;
-  assign wb_wen = complete_inst && mem_ready && writes_rd && !is_mret;
-  assign lsu_wen = can_complete_no_mem_fault && mem_wen;
+  wire        c_base_trap_request = xc_inst_error || !xc_decode_legal || xc_pc_exception ||
+                                    xc_mem_misaligned || xc_is_ecall || xc_is_ebreak;
+  wire        c_can_complete_no_mem_fault = xc_valid && !xc_inst_error && xc_decode_legal &&
+                                            !xc_mem_misaligned && !xc_pc_exception && !xc_is_ecall &&
+                                            !(c_base_trap_request && mtvec != 32'd0);
+  wire        c_mem_access = c_can_complete_no_mem_fault && (xc_mem_ren || xc_mem_wen);
+  wire        c_mem_access_fault = c_mem_access && lsu_raw_ready && lsu_raw_error;
+  wire        c_trap_request = c_base_trap_request || c_mem_access_fault;
+  wire        c_precise_trap = c_trap_request && mtvec != 32'd0;
+  wire        c_bad_without_vector = c_trap_request && mtvec == 32'd0;
+  wire        c_complete_inst = c_can_complete_no_mem_fault && !c_mem_access_fault;
+  wire        c_mem_ready = !c_mem_access || lsu_raw_ready;
+  wire        c_retire_ready = !reset && !halted && xc_valid && c_mem_ready;
+  wire        c_wb_wen = c_complete_inst && c_mem_ready && xc_writes_rd && !xc_is_mret;
+  wire        c_lsu_wen = c_can_complete_no_mem_fault && xc_mem_wen;
+  wire [31:0] c_exception_cause = xc_inst_error ? {27'd0, `NPC_EXC_INST_ACCESS_FAULT} :
+                                  !xc_decode_legal ? {27'd0, `NPC_EXC_ILLEGAL_INST} :
+                                  xc_pc_exception ? {27'd0, `NPC_EXC_INST_ADDR_MISALIGNED} :
+                                  (xc_mem_ren && xc_mem_misaligned) ? {27'd0, `NPC_EXC_LOAD_ADDR_MISALIGNED} :
+                                  (xc_mem_wen && xc_mem_misaligned) ? {27'd0, `NPC_EXC_STORE_ADDR_MISALIGNED} :
+                                  (xc_mem_ren && c_mem_access_fault) ? {27'd0, `NPC_EXC_LOAD_ACCESS_FAULT} :
+                                  (xc_mem_wen && c_mem_access_fault) ? {27'd0, `NPC_EXC_STORE_ACCESS_FAULT} :
+                                  xc_is_ecall ? {27'd0, `NPC_EXC_ECALL_M} :
+                                  xc_is_ebreak ? {27'd0, `NPC_EXC_BREAKPOINT} : 32'd0;
+  wire [31:0] c_next_pc = c_precise_trap ? mtvec : (c_bad_without_vector ? xc_pc : xc_normal_next_pc);
+  wire [31:0] c_wb_mux = (xc_wb_sel == `NPC_WB_MEM) ? lsu_rdata :
+                         ((xc_wb_sel == `NPC_WB_PC4) ? xc_pc_plus_4 :
+                          ((xc_wb_sel == `NPC_WB_CSR) ? xc_csr_rdata : xc_alu_result));
+  wire [31:0] c_forward_data = c_wb_mux;
+  wire        c_can_forward = xc_valid && c_wb_wen;
+  wire        c_rs1_match = reads_rs1 && rs1 != 5'd0 && xc_rd == rs1;
+  wire        c_rs2_match = reads_rs2 && rs2 != 5'd0 && xc_rd == rs2;
+  wire        c_load_waiting = xc_valid && xc_mem_ren && !c_mem_ready;
+  wire        load_use_stall = c_load_waiting && xc_writes_rd && (c_rs1_match || c_rs2_match);
+  wire        c_stage_stall = xc_valid && !c_mem_ready;
+  wire        x_can_advance = x_valid && !c_stage_stall && !load_use_stall && (!xc_valid || c_retire_ready);
+  wire        fx_can_accept = !fx_valid || x_can_advance || (c_retire_ready && c_next_pc != xc_pc_plus_4);
+  wire        redirect = c_retire_ready && (c_precise_trap || c_bad_without_vector || c_next_pc != xc_pc_plus_4 || (c_complete_inst && xc_is_fence_i));
+  wire        ifu_fetch_valid = !halted && !reset && !fx_valid && !drop_fetch_response && !redirect;
+  wire        ifu_invalidate = c_retire_ready && c_complete_inst && xc_is_fence_i;
+
   assign lsu_is_clint = lsu_raw_valid && (lsu_raw_addr[31:16] == 16'h0200);
   assign lsu_arb_valid = lsu_raw_valid && !lsu_is_clint;
   assign lsu_raw_ready = lsu_is_clint ? clint_ready : lsu_arb_ready;
@@ -247,30 +295,31 @@ module Core #(
                     (imm_sel == `NPC_IMM_B) ? imm_b :
                     (imm_sel == `NPC_IMM_U) ? imm_u :
                     (imm_sel == `NPC_IMM_J) ? imm_j : imm_i;
-  assign alu_src1 = src1_pc ? pc : rs1_data;
-  assign alu_src2 = src2_imm ? imm_data : rs2_data;
-  assign lsu_addr = rs1_data + (mem_wen ? imm_s : imm_i);
+  assign alu_src1 = src1_pc ? x_pc : x_rs1_data;
+  assign alu_src2 = src2_imm ? imm_data : x_rs2_data;
+  assign x_rs1_data = (c_can_forward && c_rs1_match) ? c_forward_data : rf_rs1_data;
+  assign x_rs2_data = (c_can_forward && c_rs2_match) ? c_forward_data : rf_rs2_data;
 
 `ifdef NPC_DEBUG
-  assign debug_pc = pc;
+  assign debug_pc = xc_valid ? xc_pc : (fx_valid ? fx_pc : f_pc);
   assign debug_halted = halted;
   assign debug_trap_status = trap_status;
-  assign debug_inst = inst;
+  assign debug_inst = xc_valid ? xc_inst : (fx_valid ? fx_inst : 32'd0);
   assign debug_mstatus = mstatus;
   assign debug_mtvec = mtvec;
   assign debug_mepc = mepc;
   assign debug_mcause = mcause;
-  assign commit_valid = retire_ready;
-  assign commit_pc = pc;
-  assign commit_inst = inst;
-  assign commit_next_pc = precise_trap ? mtvec : (bad_without_vector ? pc : normal_next_pc);
-  assign commit_wen = wb_wen && rd != 5'd0;
-  assign commit_rd = rd;
-  assign commit_wdata = final_wb_data;
-  assign commit_exception = bad_without_vector || inst_error || mem_access_fault;
-  assign commit_cause = exception_cause;
-  assign commit_mem_wen = retire_ready && lsu_wen;
-  assign commit_mem_ren = retire_ready && complete_inst && mem_ren;
+  assign commit_valid = c_retire_ready;
+  assign commit_pc = xc_pc;
+  assign commit_inst = xc_inst;
+  assign commit_next_pc = c_next_pc;
+  assign commit_wen = c_wb_wen && xc_rd != 5'd0;
+  assign commit_rd = xc_rd;
+  assign commit_wdata = wb_data;
+  assign commit_exception = c_bad_without_vector || xc_inst_error || c_mem_access_fault;
+  assign commit_cause = c_exception_cause;
+  assign commit_mem_wen = c_retire_ready && c_lsu_wen;
+  assign commit_mem_ren = c_retire_ready && c_complete_inst && xc_mem_ren;
   assign commit_mem_addr = lsu_write_addr;
   assign commit_mem_wdata = lsu_write_data;
   assign commit_mem_wmask = lsu_write_mask;
@@ -301,14 +350,12 @@ module Core #(
   assign commit_mem_rdata = 32'd0;
 `endif
 
-  assign ifu_invalidate = retire_ready && complete_inst && is_fence_i;
-
   Ifu u_ifu (
     .clock(clock),
     .reset(reset),
     .invalidate(ifu_invalidate),
-    .fetch_valid(!inst_valid),
-    .pc(fetch_pc),
+    .fetch_valid(ifu_fetch_valid),
+    .pc(f_pc),
     .bus_ready(ifu_bus_ready),
     .bus_rdata(ifu_bus_rdata),
     .bus_error(ifu_bus_error),
@@ -326,7 +373,7 @@ module Core #(
   );
 
   Idu u_idu (
-    .inst(inst),
+    .inst(x_inst),
     .opcode(opcode),
     .rd(rd),
     .funct3(funct3),
@@ -365,11 +412,11 @@ module Core #(
     .reset(reset),
     .raddr1(rs1[3:0]),
     .raddr2(rs2[3:0]),
-    .rdata1(rs1_data),
-    .rdata2(rs2_data),
-    .wen(!reset && !halted && wb_wen),
-    .waddr(rd[3:0]),
-    .wdata(final_wb_data),
+    .rdata1(rf_rs1_data),
+    .rdata2(rf_rs2_data),
+    .wen(!reset && !halted && c_wb_wen),
+    .waddr(xc_rd[3:0]),
+    .wdata(wb_data),
     .debug_x1(debug_x1),
     .debug_a0(debug_a0),
     .debug_regs_flat(debug_regs_flat)
@@ -383,12 +430,12 @@ module Core #(
   );
 
   Lsu u_lsu (
-    .ren(!reset && !halted && can_complete_no_mem_fault && mem_ren),
-    .wen(!reset && !halted && lsu_wen),
-    .size(mem_size),
-    .load_unsigned(mem_unsigned),
-    .addr(lsu_addr),
-    .wdata(rs2_data),
+    .ren(!reset && !halted && c_can_complete_no_mem_fault && xc_mem_ren),
+    .wen(!reset && !halted && c_lsu_wen),
+    .size(xc_mem_size),
+    .load_unsigned(xc_mem_unsigned),
+    .addr(xc_lsu_addr),
+    .wdata(xc_rs2_data),
     .bus_ready(lsu_raw_ready),
     .bus_rdata(lsu_raw_rdata),
     .bus_valid(lsu_raw_valid),
@@ -416,7 +463,7 @@ module Core #(
   );
 
   AxiArbiter u_axi_arbiter (
-    .ifu_valid(ifu_bus_valid && !inst_valid),
+    .ifu_valid(ifu_bus_valid && !drop_fetch_response),
     .ifu_addr(ifu_bus_addr),
     .ifu_len(ifu_bus_len),
     .ifu_ready(ifu_bus_ready),
@@ -487,14 +534,14 @@ module Core #(
   Csr u_csr (
     .clock(clock),
     .reset(reset),
-    .addr(csr_addr),
-    .cmd(csr_cmd),
-    .rs1_data(rs1_data),
-    .uimm(csr_uimm),
-    .commit_en(retire_ready && complete_inst && csr_cmd != `NPC_CSR_NONE),
-    .trap_en(retire_ready && precise_trap),
-    .trap_pc(pc),
-    .trap_cause(exception_cause),
+    .addr(x_valid ? csr_addr : xc_csr_addr),
+    .cmd(x_valid ? csr_cmd : xc_csr_cmd),
+    .rs1_data(x_valid ? x_rs1_data : xc_rs1_data),
+    .uimm(x_valid ? csr_uimm : xc_csr_uimm),
+    .commit_en(c_retire_ready && c_complete_inst && xc_csr_cmd != `NPC_CSR_NONE),
+    .trap_en(c_retire_ready && c_precise_trap),
+    .trap_pc(xc_pc),
+    .trap_cause(c_exception_cause),
     .rdata(csr_rdata),
     .mtvec(mtvec),
     .mepc(mepc),
@@ -503,38 +550,128 @@ module Core #(
   );
 
   Wbu u_wbu (
-    .alu_result((wb_sel == `NPC_WB_MEM) ? lsu_rdata :
-                ((wb_sel == `NPC_WB_PC4) ? pc_plus_4 :
-                 ((wb_sel == `NPC_WB_CSR) ? csr_rdata : alu_result))),
+    .alu_result(c_wb_mux),
     .wdata(wb_data)
   );
 
   always @(posedge clock) begin
     if (reset) begin
-      pc <= reset_vector;
       halted <= 1'b0;
       trap_status <= `NPC_STATUS_RUNNING;
-      inst_q <= 32'd0;
-      inst_valid <= 1'b0;
-      inst_error <= 1'b0;
+      f_pc <= reset_vector;
+      ifu_pending <= 1'b0;
+      drop_fetch_response <= 1'b0;
+      fx_valid <= 1'b0;
+      fx_pc <= 32'd0;
+      fx_inst <= 32'd0;
+      fx_inst_error <= 1'b0;
+      xc_valid <= 1'b0;
+      xc_pc <= 32'd0;
+      xc_inst <= 32'd0;
+      xc_inst_error <= 1'b0;
+      xc_rd <= 5'd0;
+      xc_writes_rd <= 1'b0;
+      xc_wb_sel <= `NPC_WB_ALU;
+      xc_mem_ren <= 1'b0;
+      xc_mem_wen <= 1'b0;
+      xc_mem_size <= `NPC_MEM_WORD;
+      xc_mem_unsigned <= 1'b0;
+      xc_csr_cmd <= `NPC_CSR_NONE;
+      xc_csr_addr <= 12'd0;
+      xc_csr_uimm <= 5'd0;
+      xc_csr_rdata <= 32'd0;
+      xc_rs1_data <= 32'd0;
+      xc_rs2_data <= 32'd0;
+      xc_alu_result <= 32'd0;
+      xc_lsu_addr <= 32'd0;
+      xc_pc_plus_4 <= 32'd0;
+      xc_normal_next_pc <= 32'd0;
+      xc_is_mret <= 1'b0;
+      xc_is_fence_i <= 1'b0;
+      xc_decode_legal <= 1'b0;
+      xc_pc_exception <= 1'b0;
+      xc_mem_misaligned <= 1'b0;
+      xc_is_ecall <= 1'b0;
+      xc_is_ebreak <= 1'b0;
     end else begin
-      if (!inst_valid && ifu_inst_ready) begin
-        inst_q <= ifu_inst;
-        inst_valid <= 1'b1;
-        inst_error <= ifu_inst_error;
+      if (ifu_inst_ready) begin
+        ifu_pending <= 1'b0;
+      end else if (ifu_fetch_valid) begin
+        ifu_pending <= 1'b1;
       end
-      if (!halted && retire_ready) begin
-        inst_valid <= 1'b0;
-        if (bad_without_vector) begin
-          halted <= 1'b1;
-          trap_status <= `NPC_STATUS_BAD;
-        end else if (precise_trap) begin
-          pc <= mtvec;
-        end else begin
-          pc <= normal_next_pc;
+
+      if (redirect) begin
+        f_pc <= c_next_pc;
+        fx_valid <= 1'b0;
+        drop_fetch_response <= ifu_pending && !ifu_inst_ready;
+      end else if (ifu_inst_ready && drop_fetch_response) begin
+        drop_fetch_response <= 1'b0;
+      end else if (ifu_inst_ready && x_direct_valid && x_can_advance) begin
+        fx_valid <= 1'b0;
+        f_pc <= f_pc + 32'd4;
+      end else if (ifu_inst_ready && fx_can_accept) begin
+        fx_valid <= 1'b1;
+        fx_pc <= f_pc;
+        fx_inst <= ifu_inst;
+        fx_inst_error <= ifu_inst_error;
+        f_pc <= f_pc + 32'd4;
+      end else if (x_can_advance) begin
+        fx_valid <= 1'b0;
+      end
+
+      if (!halted && c_retire_ready && c_bad_without_vector) begin
+        halted <= 1'b1;
+        trap_status <= `NPC_STATUS_BAD;
+      end
+
+      if (c_stage_stall || load_use_stall) begin
+        xc_valid <= xc_valid;
+      end else if (x_can_advance) begin
+        xc_valid <= 1'b1;
+        xc_pc <= x_pc;
+        xc_inst <= x_inst;
+        xc_inst_error <= x_inst_error;
+        xc_rd <= rd;
+        xc_writes_rd <= writes_rd;
+        xc_wb_sel <= wb_sel;
+        xc_mem_ren <= mem_ren;
+        xc_mem_wen <= mem_wen;
+        xc_mem_size <= mem_size;
+        xc_mem_unsigned <= mem_unsigned;
+        xc_csr_cmd <= csr_cmd;
+        xc_csr_addr <= csr_addr;
+        xc_csr_uimm <= csr_uimm;
+        xc_csr_rdata <= csr_rdata;
+        xc_rs1_data <= x_rs1_data;
+        xc_rs2_data <= x_rs2_data;
+        xc_alu_result <= alu_result;
+        xc_lsu_addr <= x_lsu_addr;
+        xc_pc_plus_4 <= x_pc_plus_4;
+        xc_normal_next_pc <= x_normal_next_pc;
+        xc_is_mret <= x_is_mret;
+        xc_is_fence_i <= x_is_fence_i;
+        xc_decode_legal <= decode_legal;
+        xc_pc_exception <= x_pc_exception;
+        xc_mem_misaligned <= x_mem_misaligned;
+        xc_is_ecall <= x_is_ecall;
+        xc_is_ebreak <= x_is_ebreak;
+      end else if (c_retire_ready) begin
+        xc_valid <= 1'b0;
+      end
+
+      if (redirect) begin
+        if (x_can_advance) begin
+          xc_valid <= 1'b0;
         end
       end
     end
   end
+
+`ifdef NPC_DEBUG
+  wire unused = |{opcode, funct3, funct7, mcause, mstatus, trap_status};
+`else
+  wire unused = |{opcode, funct3, funct7, mcause, mstatus, trap_status,
+                 lsu_write_addr, lsu_write_data, lsu_write_mask};
+`endif
 
 endmodule

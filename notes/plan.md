@@ -842,13 +842,16 @@ Rejected alternatives:
 
 Tasks:
 
-1. **P10-S1: Design and baseline capture** — planned for this session
-   - This session reads the spec, current RTL, and P8-S3 STA report, selects the justified 3-stage `F/X/C` design, records area/performance trade-offs, and updates `notes/plan.md`/`notes/next.md`.
-   - Capture enough baseline evidence for the next implementation session: 610 MHz pass, 620 MHz fail, worst paths to `u_core.u_regfile.*:D`, and P8-S3 area/register baseline.
-2. **P10-S2: Implement and smoke test** — planned
-   - Refactor `Core.v` around explicit F/X and X/C valid/data registers while keeping top-level and submodule interfaces stable initially.
-   - Implement fetch redirect/flush, C-to-X forwarding, conservative load-use stalling, C-stage memory wait, precise CSR/trap/writeback, and retirement-time `fence.i` invalidation.
-   - Run smoke/directed tests during bring-up: `smoke`, `test-addi`, `test-jalr-ebreak`, `test-lw-sw`, `test-alu`, then `test-mem-size`, `test-rv32e-illegal`, `test-csr-trap`, `test-access-fault`, `test-clint`, `test-icache`, and `test-fencei`.
+1. **P10-S1: Design and baseline capture** — completed
+   - Read the spec, current RTL, and P8-S3 STA report; selected the justified 3-stage `F/X/C` design; recorded area/performance trade-offs in `notes/plan.md` and `notes/next.md`.
+   - Captured baseline evidence for implementation: 610 MHz pass, 620 MHz fail, worst paths to `u_core.u_regfile.*:D`, and P8-S3 area/register baseline.
+2. **P10-S2: Implement and smoke test** — completed
+   - Refactored `npc/rtl/core/Core.v` around explicit F/X and X/C valid/data registers while keeping top-level and submodule interfaces stable.
+   - Implemented fetch redirect/flush, C-to-X forwarding, conservative load-use stalling, C-stage memory wait, precise CSR/trap/writeback, and retirement-time `fence.i` invalidation.
+   - Updated `npc/Makefile` `test-debug` for the new pipeline's 10-cycle two-retire debug checkpoint.
+   - Per user request, intentionally skipped ysyxSoC connection tests and STA/PPA in this session.
+   - Validation passed on macOS: directed/local standalone regression (`smoke spec-smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-csr-trap test-access-fault test-clint test-icache test-fencei test-debug test-difftest test-axi-local`), AM `hello`, all 35 `cpu-tests`, and RT-Thread scripted `halt`, all with NEMU event DiffTest where applicable.
+   - Representative P10-S2 cycle improvements versus P8-S3 baseline: `hello` 1985 vs 2116, `sum` 1423 vs 1532, `string` 3999 vs 4260, `crc32` 62105 vs 67892, `quick-sort` 11126 vs 11854, `matrix-mul` 519625 vs 543774, RT-Thread 1724877 vs 1816964.
 3. **P10-S3: Optimize timing and area** — planned
    - Run physical STA/PPA sweep on the Linux toolchain when available and compare against P8-S3 area, sequential area/register count, clock-gating checks, clean pass/fail frequency, workload cycles, and CPI.
    - Apply only measured optimizations: IFU hit path, C-stage regfile write-enable fanout, branch redirect penalty, load-use forwarding, or packet-bit trimming. Reject changes that improve Fmax while causing unjustified area or CPI regressions.
