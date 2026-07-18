@@ -63,7 +63,7 @@ ifeq ($(TRACE),1)
 VERILATOR_FLAGS += --trace
 endif
 
-.PHONY: all run sta sta-sweep smoke spec-smoke soc soc-smoke test-soc-difftest test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-axi-local test-mem-latency test-access-fault test-rv32e-illegal test-csr-trap test-debug test-difftest test-clint test-icache test-fencei clean
+.PHONY: all run sta sta-sweep smoke spec-smoke soc soc-smoke test-soc-difftest test-soc-mem test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-axi-local test-mem-latency test-access-fault test-rv32e-illegal test-csr-trap test-debug test-difftest test-clint test-icache test-fencei clean
 
 all: $(BIN)
 
@@ -114,13 +114,22 @@ test-soc-difftest: $(SOC_BIN)
 	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap' >/dev/null; \
 	printf '%s\n' "$$out" | grep 'NPC_ICACHE .*misses=[1-9]' >/dev/null
 
+test-soc-mem: $(SOC_BIN)
+	@mkdir -p $(SOC_BUILD_DIR)/tests
+	@python3 tests/make-soc-mem-bin.py $(SOC_BUILD_DIR)/tests/soc-mem.bin
+	@out="$$($(SOC_BIN) --image $(SOC_BUILD_DIR)/tests/soc-mem.bin --reset-pc 0x20000000 --max-cycles 500000 --difftest-ref $(REF_SO) 2>&1)"; \
+	printf '%s\n' "$$out"; \
+	printf '%s\n' "$$out" | grep 'NPC_DIFFTEST status=on' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'PASS' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap' >/dev/null
+
 spec-smoke: $(BIN)
 	@mkdir -p $(BUILD_DIR)/tests
 	@python3 tests/make-spec-uart-bin.py $(BUILD_DIR)/tests/spec-uart.bin
 	@out="$$($(BIN) --image $(BUILD_DIR)/tests/spec-uart.bin --max-cycles 400 2>&1)"; \
 	printf '%s\n' "$$out"; \
 	printf '%s\n' "$$out" | grep 'SPEC' >/dev/null; \
-	printf '%s\n' "$$out" | grep 'NPC_SPEC_RESULT status=good reason=uart_eot' >/dev/null
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=uart_eot' >/dev/null
 
 smoke: $(BIN)
 	@out="$$($(BIN) --max-cycles 12 2>&1)"; \

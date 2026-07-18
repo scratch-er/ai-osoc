@@ -229,6 +229,8 @@ public:
       if (commit_mem_wen) {
         memory_.commit_mmio_write(commit_mem_addr, commit_mem_wdata, commit_mem_wmask);
       }
+      if (memory_.uart_eot()) return {"good", "uart_eot"};
+      if (memory_.uart_expect_seen()) return {"good", "uart_expect"};
 
       if (log_level_ >= 1 || trace_on_) {
         char buf[160];
