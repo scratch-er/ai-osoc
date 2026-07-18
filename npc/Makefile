@@ -129,7 +129,7 @@ spec-smoke: $(BIN)
 	@out="$$($(BIN) --image $(BUILD_DIR)/tests/spec-uart.bin --max-cycles 400 2>&1)"; \
 	printf '%s\n' "$$out"; \
 	printf '%s\n' "$$out" | grep 'SPEC' >/dev/null; \
-	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=uart_eot' >/dev/null
+	printf '%s\n' "$$out" | grep 'NPC_\(SPEC_\)\?RESULT status=good reason=uart_eot' >/dev/null
 
 smoke: $(BIN)
 	@out="$$($(BIN) --max-cycles 12 2>&1)"; \
@@ -198,7 +198,7 @@ test-mem-size: $(BIN)
 	out="$$($(BIN) --image tests/bin/store-misaligned.bin --reset-pc 0x100 --max-cycles 16 2>&1 || true)"; \
 	printf '%s\n' "$$out"; \
 	printf '%s\n' "$$out" | grep 'PC=00000104 I=00012123 .*EXC=1 CAUSE=6' >/dev/null; \
-	out="$$($(BIN) --image tests/bin/branch-misaligned.bin --reset-pc 0x100 --max-cycles 8 2>&1 || true)"; \
+	out="$$($(BIN) --image tests/bin/branch-misaligned.bin --reset-pc 0x100 --max-cycles 12 2>&1 || true)"; \
 	printf '%s\n' "$$out"; \
 	printf '%s\n' "$$out" | grep 'PC=00000100 I=00000163 .*EXC=1 CAUSE=0' >/dev/null
 
@@ -216,13 +216,13 @@ test-csr-trap: $(BIN)
 	out="$$($(BIN) --image tests/bin/sys-nop.bin --reset-pc 0x100 --max-cycles 32 --expect-x1 0x7 2>&1)"; \
 	printf '%s\n' "$$out"; \
 	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap .*x1=0x00000007' >/dev/null; \
-	out="$$($(BIN) --image tests/bin/csr-readonly-illegal.bin --reset-pc 0x100 --max-cycles 8 2>&1 || true)"; \
+	out="$$($(BIN) --image tests/bin/csr-readonly-illegal.bin --reset-pc 0x100 --max-cycles 12 2>&1 || true)"; \
 	printf '%s\n' "$$out"; \
 	printf '%s\n' "$$out" | grep 'PC=00000100 I=f1101073 .*EXC=1 CAUSE=2' >/dev/null
 
 
 test-rv32e-illegal: $(BIN)
-	@out="$$($(BIN) --image tests/bin/rv32e-illegal.bin --reset-pc 0x100 --max-cycles 8 2>&1 || true)"; \
+	@out="$$($(BIN) --image tests/bin/rv32e-illegal.bin --reset-pc 0x100 --max-cycles 12 2>&1 || true)"; \
 	printf '%s\n' "$$out"; \
 	printf '%s\n' "$$out" | grep 'NPC_RESULT status=bad reason=illegal_inst' >/dev/null; \
 	printf '%s\n' "$$out" | grep 'PC=00000100 I=00100813 .*EXC=1 CAUSE=2' >/dev/null

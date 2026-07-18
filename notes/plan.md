@@ -852,9 +852,13 @@ Tasks:
    - Per user request, intentionally skipped ysyxSoC connection tests and STA/PPA in this session.
    - Validation passed on macOS: directed/local standalone regression (`smoke spec-smoke test-addi test-jalr-ebreak test-lw-sw test-alu test-mem-size test-rv32e-illegal test-csr-trap test-access-fault test-clint test-icache test-fencei test-debug test-difftest test-axi-local`), AM `hello`, all 35 `cpu-tests`, and RT-Thread scripted `halt`, all with NEMU event DiffTest where applicable.
    - Representative P10-S2 cycle improvements versus P8-S3 baseline: `hello` 1985 vs 2116, `sum` 1423 vs 1532, `string` 3999 vs 4260, `crc32` 62105 vs 67892, `quick-sort` 11126 vs 11854, `matrix-mul` 519625 vs 543774, RT-Thread 1724877 vs 1816964.
-3. **P10-S3: Optimize timing and area** — planned
-   - Run physical STA/PPA sweep on the Linux toolchain when available and compare against P8-S3 area, sequential area/register count, clock-gating checks, clean pass/fail frequency, workload cycles, and CPI.
-   - Apply only measured optimizations: IFU hit path, C-stage regfile write-enable fanout, branch redirect penalty, load-use forwarding, or packet-bit trimming. Reject changes that improve Fmax while causing unjustified area or CPI regressions.
+3. **P10-S3: Optimize timing and area** — completed on Linux
+   - Rebuilt the stale macOS NEMU REF as a Linux/aarch64 shared object and refreshed RT-Thread AM generated paths with `make init` before validation.
+   - Captured the first Linux STA/PPA result for the P10-S2 pipeline: area `25971.120000`, `1625` DFFs, worst path from `Ifu` hit/refill data through the X-stage direct-response bypass into `xc_alu_result` / `xc_normal_next_pc`, reported Fmax about `449 MHz` (`500 MHz` failed by `-0.226 ns`).
+   - Removed the timing-hostile IFU-to-X/C direct-response bypass so every fetch response is first captured in the `F/X` register. This intentionally adds one startup/fetch-transfer cycle in some tests, so the tight single-instruction directed test bounds were widened from 8 to 12 cycles where needed.
+   - Optimized physical result: area `25376.400000` (-`594.720000`, -2.29% vs P10-S2 pipeline), `1633` DFFs (+8), worst path `1.558 ns`, reported Fmax `623.649 MHz`, clean checked `600 MHz`, first failing checked `650 MHz`.
+   - Performance tradeoff is mixed but acceptable for timing/area: `hello` became `2153` cycles versus P10-S2 `1985` and P8-S3 `2116`, while RT-Thread stayed better than the P8-S3 baseline at `1807788` cycles versus P8-S3 `1816964` (but slower than P10-S2 `1724877`). Keep this only because it removes the measured critical path and reduces area; revisit with a better registered fast path only if workload CPI becomes the bottleneck.
+   - Validation passed: spec smoke in `NPC_DEBUG=0`, directed/DiffTest checks through access-fault/CLINT/DiffTest, AM `hello`, and RT-Thread scripted `halt` with NEMU event DiffTest. SoC validation remains for P10-S4.
 4. **P10-S4: Final test and close** — planned
    - Run the full functional suite: `test-difftest`, all 35 `cpu-tests`, `hello`, RT-Thread scripted `halt`, SoC `test-soc-difftest`, SoC `test-soc-mem`, and AM `riscv32e-ysyxsoc` `dummy`/`hello`.
    - Record final timing/PPA/performance results and remaining caveats in `notes/plan.md`, `notes/next.md`, and a Phase 10 timing note if the result is substantial.

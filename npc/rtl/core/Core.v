@@ -151,7 +151,6 @@ module Core #(
   wire [31:0] x_inst;
   wire        x_inst_error;
   wire        x_valid;
-  wire        x_direct_valid;
   wire [31:0] imm_data;
   wire [31:0] alu_src1;
   wire [31:0] alu_src2;
@@ -204,11 +203,10 @@ module Core #(
   wire [31:0] mstatus;
   wire [31:0] wb_data;
 
-  assign x_direct_valid = ifu_pending && ifu_inst_ready && !drop_fetch_response && !fx_valid && !xc_valid && !redirect;
-  assign x_valid = fx_valid || x_direct_valid;
-  assign x_pc = x_direct_valid ? f_pc : fx_pc;
-  assign x_inst = x_direct_valid ? ifu_inst : fx_inst;
-  assign x_inst_error = x_direct_valid ? ifu_inst_error : fx_inst_error;
+  assign x_valid = fx_valid;
+  assign x_pc = fx_pc;
+  assign x_inst = fx_inst;
+  assign x_inst_error = fx_inst_error;
 
   wire        rd_is_rv32e = rd[4] == 1'b0;
   wire        rs1_is_rv32e = rs1[4] == 1'b0;
@@ -606,9 +604,6 @@ module Core #(
         drop_fetch_response <= ifu_pending && !ifu_inst_ready;
       end else if (ifu_inst_ready && drop_fetch_response) begin
         drop_fetch_response <= 1'b0;
-      end else if (ifu_inst_ready && x_direct_valid && x_can_advance) begin
-        fx_valid <= 1'b0;
-        f_pc <= f_pc + 32'd4;
       end else if (ifu_inst_ready && fx_can_accept) begin
         fx_valid <= 1'b1;
         fx_pc <= f_pc;
@@ -671,7 +666,7 @@ module Core #(
   wire unused = |{opcode, funct3, funct7, mcause, mstatus, trap_status};
 `else
   wire unused = |{opcode, funct3, funct7, mcause, mstatus, trap_status,
-                 lsu_write_addr, lsu_write_data, lsu_write_mask};
+                 xc_inst, lsu_write_addr, lsu_write_data, lsu_write_mask};
 `endif
 
 endmodule

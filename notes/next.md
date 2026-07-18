@@ -988,3 +988,89 @@ P9-S1 confirmed the elaboration-related facts below on macOS: `dev-init`, the pl
 - `ready-to-run/D-stage/ysyxSoCFull.v` has no MROM (D-stage boots from flash) — not a fallback for our `0x20000000` reset PC.
 - Without debug ports the SoC harness cannot see retired `ebreak` or UART bytes (RTL `$write` goes straight to sim stdout): P9-S2 smokes terminate by cycle limit and check stdout; P9-S3 adds the debug/commit exposure patch (`ysyxSoC.patch`) for precise termination and DiffTest.
 - NEMU DiffTest restoration needs MROM + SRAM regions (the P5-S1 region table) and MROM image sync to REF; the P5-S2 NPC-UART replay window at `0x10000000` must be checked to cover UART16550 register accesses (including LSR reads).
+
+## Phase 10 Session 3 status
+
+`P10-S3: Optimize timing and area` is complete on the Linux host.
+
+What changed:
+
+- `npc/rtl/core/Core.v`: removed the IFU-to-X/C direct-response bypass (`x_direct_valid`). Fetch responses now always enter the `F/X` register before decode/execute. This cuts the measured critical path from the IFU hit/refill data/tag cone through decode/regfile/ALU/next-PC logic into the `X/C` packet registers.
+- `npc/Makefile`: widened tight single-instruction trap test cycle limits from 8 to 12 where the extra fetch-register transfer cycle is visible (`branch-misaligned`, `csr-readonly-illegal`, `rv32e-illegal`). Functional expectations are unchanged.
+- `npc/Makefile`: `spec-smoke` now accepts both `NPC_RESULT ... uart_eot` and the spec-mode `NPC_SPEC_RESULT ... uart_eot` line.
+- `npc/rtl/core/Core.v`: included `xc_inst` in the spec-mode unused reduction to keep `NPC_DEBUG=0` Verilator lint clean.
+
+Measured STA/PPA:
+
+- P10-S2 pipeline Linux baseline (`build/p10-s3-baseline/pipeline`):
+  - area `25971.120000`
+  - `1625` DFFs
+  - worst path endpoint examples: `u_core.xc_alu_result_0__reg_p:D`, `u_core.xc_normal_next_pc_*__reg_p:D`
+  - worst path delay `2.182 ns`, reported Fmax about `449.147 MHz`
+  - `500 MHz` failed by `-0.226 ns`
+- P10-S3 optimized (`build/p10-s3-no-direct/pipeline`):
+  - area `25376.400000` (`-594.720000`, `-2.29%` vs P10-S2 pipeline)
+  - `1633` DFFs (`+8`)
+  - worst path endpoint `u_core.xc_normal_next_pc_5__reg_p:D`
+  - worst path delay `1.558 ns`, reported Fmax `623.649 MHz`
+  - clean checked `600 MHz` (`+0.063 ns`), first failing checked `650 MHz` (`-0.065 ns`)
+
+Performance tradeoff:
+
+- `hello` with NEMU event DiffTest: `NPC_RESULT status=good reason=good_trap cycles=2153 insts=465`; this is slower than P10-S2 (`1985`) and slightly slower than P8-S3 (`2116`). `NPC_ICACHE accesses=465 hits=297 misses=168 miss_wait_cycles=1012 hit_rate_x1000=638 amat_x1000=3176`.
+- RT-Thread scripted `halt` with NEMU event DiffTest: `NPC_RESULT status=good reason=good_trap cycles=1807788 insts=511842`; this is slower than P10-S2 (`1724877`) but still slightly better than P8-S3 (`1816964`). `NPC_ICACHE accesses=511842 hits=428931 misses=82911 miss_wait_cycles=521844 hit_rate_x1000=838 amat_x1000=2019`.
+- Interpretation: the change is kept for now because it simultaneously removes the measured timing bottleneck and reduces area, but it costs a fetch-transfer cycle. If later workload CPI dominates, revisit with a better registered fast path rather than restoring the unregistered IFU-to-X/C bypass.
+
+Validation completed:
+
+1. Rebuilt the stale macOS NEMU REF for Linux using the documented `notes/platform-linux.md` sequence. `nemu/build/riscv32-nemu-interpreter-so` is now a Linux/aarch64 shared object again.
+2. Refreshed RT-Thread AM generated paths with `make -C rt-thread-am/bsp/abstract-machine init` after `files.mk` still contained old `/Users/venti/...` paths.
+3. Directed local/DiffTest checks passed after rebuilding debug mode:
+
+```sh
+make -C npc smoke spec-smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
+  test-mem-size test-rv32e-illegal test-csr-trap test-access-fault \
+  test-clint test-icache test-fencei test-debug test-difftest test-axi-local \
+  REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+```
+
+A later rerun of the DiffTest-backed tail (`test-access-fault test-clint test-difftest`) passed after the NEMU REF rebuild; the full directed run passed through those same checks when the valid REF was present.
+
+4. Spec-mode smoke passed:
+
+```sh
+make -C npc NPC_DEBUG=0 spec-smoke
+```
+
+Output included `SPEC` and `NPC_SPEC_RESULT status=good reason=uart_eot cycles=57 limit=400`.
+
+5. AM `hello` passed with NEMU event DiffTest:
+
+```sh
+make -C am-kernels/kernels/hello ARCH=riscv32e-npc \
+  AM_HOME=/host/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-linux-gnu- NPC_MAX_CYCLES=2000000 \
+  NPC_DIFFTEST_REF=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+6. RT-Thread scripted shell `halt` passed with NEMU event DiffTest after rebuilding NPC in default debug mode:
+
+```sh
+make -C npc clean && make -C npc REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+make -C rt-thread-am/bsp/abstract-machine ARCH=riscv32e-npc \
+  AM_HOME=/host/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-linux-gnu- NPC_MAX_CYCLES=12000000 \
+  NPC_DIFFTEST_REF=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+Current working tree notes:
+
+- Intended P10-S3 source changes: `npc/rtl/core/Core.v`, `npc/Makefile`, `notes/plan.md`, `notes/next.md`.
+- Tool-generated/rebuilt files may also be dirty: `nemu/build/`, `nemu/tools/*/build/`, `rt-thread-am/bsp/abstract-machine/files.mk`; inspect before committing.
+- `ysyxSoC` still appears modified as a submodule from prior P9 work; do not commit inside it.
+
+Next steps:
+
+1. P10-S4 final regression remains: full `cpu-tests`, SoC `test-soc-difftest`, SoC `test-soc-mem`, and AM `riscv32e-ysyxsoc` `dummy`/`hello`.
+2. If CPI becomes the main issue, consider a registered fast fetch path or selective direct-hit optimization, but do not restore the unregistered IFU-to-X/C cone without STA evidence.
+3. Ask the user before any git commit.
