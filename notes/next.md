@@ -12,7 +12,8 @@ Current state:
   - `84d258d Validate physical CLINT workloads`
 - Phase 7 (`Instruction Cache and fence.i`) is complete through `P7-S3: Linux migration, final exit check, and Phase 8 preparation`.
 - Phase 8 (`Linux PPA, Optimization, and Spec-Interface Readiness`) is complete through `P8-S3: Closing P8` (validated on Linux; not yet committed — ask the user before any git commit).
-- **Phase 9 was re-planned per user request:** connecting to ysyxSoC (deferred since Phase 5) is now the new `Phase 9: ysyxSoC Integration and AXI Validation` in `notes/plan.md`; the optional pipeline phase became Phase 10 and final integration became Phase 11. `P9-S1` through `P9-S5: AM riscv32e-ysyxsoc runtime and hello/dummy on SoC` are complete on the macOS host. Next session: run `P9-S6: Phase 9 regression and closeout`.
+- Phase 9 (`ysyxSoC Integration and AXI Validation`) is closed through `P9-S6: Phase 9 regression and closeout`.
+- Phase 10 (`Pipeline and Targeted Performance Design`) has been planned per user request. The selected design is a justified 3-stage elastic in-order pipeline (`F/X/C`), based on `specs/core.md` and the P8-S3 STA report under `build/p8-s3-close/rerun-sta-20260718`; do not switch to a classic 5-stage or 4-stage design unless measurements after the 3-stage implementation justify it. Phase 10 is organized as four sessions: design (this session), implement and smoke test, optimize timing and area, final test and close. Next implementation session: start `P10-S2: Implement and smoke test`.
 - Do not modify `AGENTS.md` — it is project-supplied and owned by the user. Record project conventions (such as the `ysyxSoC.patch` workflow) in `notes/` only; the user explicitly reverted an `AGENTS.md` edit for this.
 - The project must remain portable across macOS and Linux. At the start of each future session, detect the current platform and choose commands/toolchain settings from the matching platform note; do not assume either macOS or Linux globally.
 - Platform notes were split out:
@@ -870,11 +871,37 @@ Current known limitations after closing Phase 9:
 - STA caveat remains: current timing is standalone core-top STA with only a core clock constraint; no SoC AXI input/output delays are modeled yet.
 - `ysyxSoC/build/` and `npc/build/` outputs are generated; rebuild on the current platform before trusting binaries after a host switch.
 
+## Phase 10 planning status
+
+Phase 10 has been planned from the spec and current STA evidence. Key facts to preserve for the implementation session:
+
+- Core spec constraints: RV32E_Zicsr, M-mode only, single core, in-order memory, no data cache/interrupts/VM/PMP/PMA, fixed 8-instruction FF icache with 16-byte lines and burst refill, `fence.i` clears icache, built-in CLINT only implements `mtime/mtimeh`.
+- STA evidence from `build/p8-s3-close/rerun-sta-20260718`:
+  - `NPC-610MHz` passes; `NPC-620MHz` fails.
+  - `NPC-620MHz/NPC.rpt` worst setup endpoints are register-file destination flops such as `u_core.u_regfile.regs[2]_23__reg_p:D`, with representative path delay about `1.585 ns`, required about `1.564 ns`, slack about `-0.021 ns`, reported Fmax about `612 MHz`.
+  - The path indicates a decode/control/PC/trap/AXI/CLINT/writeback cone feeding regfile write data/enable; this justifies a cut between decode/execute/request construction and precise commit/writeback, not a generic classic pipeline.
+  - Register-file clock-gating checks are close at 620 MHz, so track clock-gating paths during P10 STA.
+- Selected design: 3-stage elastic in-order `F/X/C` pipeline.
+  - `F`: fetch PC and existing `Ifu` icache/refill producer; emits `{pc, inst, inst_error}` into F/X and handles redirects/flushes.
+  - `X`: decode, register read, execute, branch target/condition, LSU request construction, CSR read/write inputs, preliminary exception cause; captures a complete commit packet into X/C.
+  - `C`: waits for memory responses, performs precise register writeback, CSR/trap update, `fence.i` invalidation, redirect, halt/trap status, and `commit_*`/debug reporting.
+- Required first hazards: C-to-X forwarding for pending register writes; conservative load-use stall/backpressure while C holds an incomplete load; redirect flush for branch/JAL/JALR/trap/`mret`; retirement-time `fence.i` invalidation.
+- Area/PPA discipline:
+  - Compare against P8-S3 physical baseline: chip area `22685.320000`, sequential area `8001.840000`, and `1299` DFFs as recorded in `notes/p8-timing-and-ppa.md`.
+  - Keep the initial design to F/X and X/C packet registers plus necessary precise-commit control. Do not add a decode stage, branch predictor, prefetch queue, scoreboard, multi-outstanding memory, or data cache without measurement.
+  - Judge success by performance per area: Fmax-only wins that add large mux/register overhead or worsen CPI need evidence.
+- Rejected unless later measurement justifies them:
+  - 4-stage `F/D/X/C`: more timing margin but more forwarding/flush/branch-penalty/area complexity.
+  - Minimal writeback retiming: lower risk but likely does not improve CPI because it still does not overlap fetch and execute.
+
 ## Next steps
 
-1. Start Phase 10 (`Optional Pipeline and Targeted Optimizations`) only after re-reading this closeout section and the Phase 10 section in `notes/plan.md`.
-2. Before any Phase 10 optimization, preserve the Phase 9 correctness suite above as the regression baseline, especially `test-soc-mem`, `test-soc-difftest`, 35 `cpu-tests`, `hello`, and RT-Thread.
-3. Do not commit unless the user explicitly asks. If asked to commit, include the Phase 8 and Phase 9 accumulated changes, but still do not commit inside the `ysyxSoC` submodule.
+1. This session is `P10-S1: Design and baseline capture`; continue with `P10-S2: Implement and smoke test` from the detailed Phase 10 section in `notes/plan.md`.
+2. Before RTL changes, preserve the Phase 9 correctness suite above as the regression baseline, especially `test-soc-mem`, `test-soc-difftest`, 35 `cpu-tests`, `hello`, RT-Thread, and the P8-S3 STA/PPA data.
+3. Implement only the selected 3-stage `F/X/C` approach unless new measurements justify revising the plan with the user.
+4. P10-S3 is explicitly for optimizing both timing and area; do not optimize Fmax while ignoring area/reg-count/CPI.
+5. P10-S4 is final full regression and closeout.
+6. Do not commit inside the `ysyxSoC` submodule. Keep using the root `ysyxSoC.patch` workflow for SoC debug/commit exposure.
 
 ## Phase 9 planning facts (verified on the macOS host; re-verify on Linux)
 

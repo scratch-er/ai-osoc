@@ -782,31 +782,86 @@ Exit criteria:
 - AM `riscv32e-ysyxsoc` runs `dummy` and `hello` on the SoC sim.
 - All pre-existing NPC/NEMU regressions still pass.
 
-## Phase 10: Optional Pipeline and Targeted Optimizations
+## Phase 10: Pipeline and Targeted Performance Design
 
-Goal: improve performance only after the non-pipelined/bus/cache design is correct and measured.
+Goal: improve measured performance with a justified microarchitecture, not by copying a classic pipeline template. The selected design is a purpose-built 3-stage elastic in-order pipeline (`F/X/C`) derived from the core specification, the current RTL boundaries, and the P8-S3 physical STA report.
 
 Relevant lecture guidance:
 
-- B5 pipeline processor, hazards, forwarding, branch prediction, pipeline `fence.i`.
+- B5 pipeline processor concepts: stage boundaries, hazards, forwarding, branch/trap flushing, and pipeline `fence.i`.
+- Use the lecture guidance as vocabulary and checks, but justify every stage by this core's spec and STA evidence.
+
+Baseline evidence:
+
+- Spec constraints from `specs/core.md`:
+  - RV32E_Zicsr, M-mode only, single core.
+  - In-order memory behavior; no data cache, interrupts, virtual memory, PMP, or PMA.
+  - Fixed FF icache: 8 instructions, 16-byte line, direct-mapped, burst refill; `fence.i` clears icache.
+  - Built-in CLINT only implements `mtime/mtimeh`; AXI master remains 32-bit single-core in-order for this phase.
+- Current physical STA under `build/p8-s3-close/rerun-sta-20260718`:
+  - `NPC-610MHz` passes and `NPC-620MHz` fails.
+  - `NPC-620MHz/NPC.rpt` reports worst setup endpoints at register-file destination flops such as `u_core.u_regfile.regs[2]_23__reg_p:D`; representative path delay is about `1.585 ns`, required about `1.564 ns`, slack about `-0.021 ns`, reported Fmax about `612 MHz`.
+  - The path is not evidence for a generic five-stage design. It indicates that decode/control/PC/trap/AXI/CLINT/writeback selection is still in the same cone as the register-file write input/enable, so the important cut is between decode/execute/request construction and precise commit/writeback.
+  - Clock-gating checks on register-file flops are close at 620 MHz, so Phase 10 must track both ordinary setup and clock-gating paths.
+- Current RTL structure:
+  - `Core.v` holds one fetched instruction in `inst_q/inst_valid` and fetches the next instruction only when `inst_valid` is false. Icache hits therefore do not overlap with execution/commit.
+  - `Ifu.v` already has an elastic hit/refill FSM and can remain the fetch producer behind a valid/ready boundary.
+  - `RegFile.v` has asynchronous reads and synchronous writes over 16 RV32E registers.
+  - `AxiMaster.v`/`AxiArbiter.v` are single-outstanding and in-order; keep this property unless later measurements prove a need for more.
+
+Selected design:
+
+1. **F stage: fetch/cache**
+   - Holds the fetch PC and requests `Ifu` when downstream can accept a new instruction.
+   - Captures `{pc, inst, inst_error}` into an `F/X` register on icache hit or refill completion.
+   - Handles redirects by replacing fetch PC and flushing younger fetched state.
+   - Keeps existing burst refill behavior; no branch prediction or extra prefetch in the first implementation because that would add control state, muxing, and verification cost before there is branch-penalty evidence.
+2. **X stage: decode, register read, execute, and request construction**
+   - Decodes the instruction, checks RV32E and CSR legality, reads the register file, builds immediates/control, computes ALU result, branch/JAL/JALR targets, LSU address/mask/data, CSR read/write inputs, and preliminary exception cause.
+   - Captures all commit-time fields into an `X/C` register.
+   - Adds C-to-X forwarding for pending register writes. Start with conservative load-use stalling while a C-stage load is waiting for data; optimize only if measured stalls matter.
+3. **C stage: memory wait, writeback, CSR/trap, redirect, and retire**
+   - Holds one instruction until it can retire precisely.
+   - Non-memory instructions commit in one cycle when valid.
+   - Loads/stores drive the existing LSU/CLINT/AXI path and stall C until the response arrives; access faults are generated only on the response.
+   - Performs the single architectural update point: register writeback, CSR commit/trap update, `fence.i` icache invalidation, PC redirect, halt/trap status, and `commit_*`/debug reporting.
+   - Backpressures X and F while stalled to preserve in-order and single-outstanding memory behavior.
+
+Area and PPA discipline:
+
+- Treat area as a first-class metric, not a cleanup afterthought. P10 must compare area, sequential area/register count, and key cell growth against the P8-S3 physical baseline (`Chip area 22685.320000`, sequential area `8001.840000`, `1299` DFFs in the recorded P8-S3 note).
+- Keep the initial implementation to two pipeline packet registers (`F/X` and `X/C`) plus only the control bits needed for precise commit. Do not add a separate decode stage, branch predictor, prefetch queue, scoreboard, multi-outstanding memory, or data cache in the first design.
+- Keep forwarding minimal: C-to-X register-result forwarding plus conservative load-use stall. Add load-result forwarding or earlier branch redirect only after cycle counters show the area is worth it.
+- Avoid duplicating large combinational blocks. Reuse existing `Idu`, `Exu`, `Lsu`, `Csr`, `Ifu`, `AxiArbiter`, and `AxiMaster` interfaces where possible; only split modules if it reduces timing or improves reviewability without increasing replicated logic.
+- Optimization success is performance per area, not Fmax alone: a higher frequency that adds large mux/register overhead or worsens CPI must be justified against workload results.
+
+Rejected alternatives:
+
+- **4-stage `F/D/X/C`**: may provide more frequency margin by splitting decode/register read from execute, but it adds more forwarding, branch penalty, flush complexity, and area. Use only if the selected 3-stage design cannot meet a measured target after implementation.
+- **Minimal writeback retiming**: lowest risk and likely improves the current regfile write STA path, but it does not overlap fetch and execute and may worsen CPI. Keep only as a fallback experiment if full pipelining destabilizes functionality.
 
 Tasks:
 
-1. Decide from counters whether pipeline work is worth doing under current constraints.
-2. If yes, introduce a simple pipeline using existing valid/ready stage boundaries.
-3. Start with conservative hazard handling:
-   - stall for RAW hazards
-   - flush on control-flow changes and exceptions
-   - precise exception state for required exceptions
-4. Add forwarding only after measuring RAW-stall impact.
-5. Keep branch prediction simple unless counters show it matters.
-6. Ensure `fence.i` flushes younger fetched/decode-stage instructions after clearing icache.
-7. Use DiffTest at retirement and targeted random/fuzz tests for hazard sequences.
+1. **P10-S1: Design and baseline capture** — planned for this session
+   - This session reads the spec, current RTL, and P8-S3 STA report, selects the justified 3-stage `F/X/C` design, records area/performance trade-offs, and updates `notes/plan.md`/`notes/next.md`.
+   - Capture enough baseline evidence for the next implementation session: 610 MHz pass, 620 MHz fail, worst paths to `u_core.u_regfile.*:D`, and P8-S3 area/register baseline.
+2. **P10-S2: Implement and smoke test** — planned
+   - Refactor `Core.v` around explicit F/X and X/C valid/data registers while keeping top-level and submodule interfaces stable initially.
+   - Implement fetch redirect/flush, C-to-X forwarding, conservative load-use stalling, C-stage memory wait, precise CSR/trap/writeback, and retirement-time `fence.i` invalidation.
+   - Run smoke/directed tests during bring-up: `smoke`, `test-addi`, `test-jalr-ebreak`, `test-lw-sw`, `test-alu`, then `test-mem-size`, `test-rv32e-illegal`, `test-csr-trap`, `test-access-fault`, `test-clint`, `test-icache`, and `test-fencei`.
+3. **P10-S3: Optimize timing and area** — planned
+   - Run physical STA/PPA sweep on the Linux toolchain when available and compare against P8-S3 area, sequential area/register count, clock-gating checks, clean pass/fail frequency, workload cycles, and CPI.
+   - Apply only measured optimizations: IFU hit path, C-stage regfile write-enable fanout, branch redirect penalty, load-use forwarding, or packet-bit trimming. Reject changes that improve Fmax while causing unjustified area or CPI regressions.
+4. **P10-S4: Final test and close** — planned
+   - Run the full functional suite: `test-difftest`, all 35 `cpu-tests`, `hello`, RT-Thread scripted `halt`, SoC `test-soc-difftest`, SoC `test-soc-mem`, and AM `riscv32e-ysyxsoc` `dummy`/`hello`.
+   - Record final timing/PPA/performance results and remaining caveats in `notes/plan.md`, `notes/next.md`, and a Phase 10 timing note if the result is substantial.
+   - Commit the Phase 10 notes/RTL changes after final regression.
 
 Exit criteria:
 
-- Pipelined version passes the same functional suite as baseline.
-- Performance gain is measured and justified against area/frequency cost.
+- The selected 3-stage pipeline passes the same functional suite as the P8/P9 baseline, including DiffTest and ysyxSoC smoke/memory tests.
+- Performance gain is measured and justified against area, register count, and timing cost.
+- Any decision to split further into 4 stages, add early redirect, or add load-result forwarding is backed by measured bottlenecks rather than classic-design habit.
 
 ## Phase 11: Final Integration and Documentation
 
