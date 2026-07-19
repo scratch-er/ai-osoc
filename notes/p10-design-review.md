@@ -693,3 +693,80 @@ Better alternatives to consider:
    - A lighter alternative is to review forwarding and dependency logic fanout around `rf_rs*_data`/`x_rs*_data`, preserving the current 3-stage schedule.
 
 Recommended next attempt: restore separate branch comparison as a measured experiment, compare against P10-S8 on timing and area, and keep it only if the frequency gain justifies the area returned.
+
+## 13. Separate branch comparator attempt result
+
+P10-S10 tested the follow-up recommendation from P10-S9: re-evaluate the comparator-sharing decision after the P10-S8 redirect split.
+
+What was tried:
+
+- In `npc/rtl/core/Exu.v`, temporarily removed branch-facing comparator outputs from the public interface and kept signed/unsigned compare wires only for `SLT`/`SLTU` ALU results.
+- In `npc/rtl/core/Core.v`, temporarily added direct branch comparators from `x_rs1_data`/`x_rs2_data` and changed `branch_taken` to use those local comparators.
+- Simplified `alu_src2` from the branch-special form to `src2_imm ? imm_data : x_rs2_data`, because branch target generation already uses `x_pc + imm_b` and branch writeback does not use `alu_result`.
+
+Why this was tried:
+
+- P10-S8 changed the timing balance: the old full-width next-PC endpoint disappeared, and the top endpoints became `xc_alu_result`, `xc_redirect`, and `xc_pc_exception`.
+- Comparator sharing was a deliberate P10-S7 area/timing trade-off. Re-testing it after the redirect split was a structural architectural check, not a random endpoint edit.
+- The expected win was that branch decision logic would no longer depend on the ALU operand mux path, while ALU `SLT`/`SLTU` would keep their own compare.
+
+Functional validation before judging PPA passed:
+
+```sh
+make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke
+make -C npc clean && make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
+  test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest \
+  test-clint test-icache test-fencei test-access-fault \
+  REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+make -C rt-thread-am/bsp/abstract-machine ARCH=riscv32e-npc \
+  AM_HOME=/host/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-linux-gnu- NPC_MAX_CYCLES=12000000 \
+  NPC_DIFFTEST_REF=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+Results:
+
+- Spec smoke passed: `NPC_SPEC_RESULT status=good reason=uart_eot cycles=57 limit=400`.
+- Directed/debug regression passed, including ALU, branch/jalr, memory, CSR/trap, CLINT, icache, fence.i, access-fault, and DiffTest cases.
+- RT-Thread passed through scripted shell `halt` with DiffTest: `NEMU_RESULT status=good`, `NPC_RESULT status=good reason=good_trap cycles=1807800 insts=511842`.
+
+PPA command:
+
+```sh
+make -C npc sta-sweep \
+  STA_O=../build/p10-s10-separate-branch-compare/ppa \
+  STA_LOG_DIR=../build/p10-s10-separate-branch-compare/logs \
+  STA_FREQS="680 690 700"
+```
+
+Measured result against P10-S8 redirect split:
+
+| Metric | P10-S8 redirect split | P10-S10 separate branch compare | Delta |
+| --- | ---: | ---: | ---: |
+| Chip area | `22528.520000` | `22562.960000` | `+34.440000` (`+0.15%`) |
+| Sequential area | `9092.160000` | `9092.160000` | `0` |
+| `DFFQX1H7L` | `1476` | `1476` | `0` |
+| `ICGX0P5H7L` | `17` | `17` | `0` |
+| Clean checked target | `680 MHz` | below `680 MHz` | regression |
+| 680 MHz worst slack | `+0.006 ns` | `-0.165 ns` | `-0.171 ns` |
+| 690 MHz worst slack | `-0.015 ns` | `-0.186 ns` | `-0.171 ns` |
+| Reported top Fmax | `682.840 MHz` | `611.624 MHz` | `-71.216 MHz` |
+
+Interpretation:
+
+- This attempt is functionally correct but a clear PPA failure.
+- The separate branch comparator increased area slightly and made timing much worse. The top endpoint moved to `xc_pc_exception_reg_p:D`, with a `1.593 ns` path at the 680 MHz report.
+- The detailed path still starts from instruction/regfile-read logic, but now the separate compare/misalignment/exception cone is synthesized into a deeper path before `xc_pc_exception`. The duplicated branch comparator did not isolate the critical cone; it enlarged the PC-exception/branch-decision logic and disturbed synthesis around the same X-stage regfile/forward/compare region.
+- The previous comparator sharing was therefore a good architectural decision for the current 3-stage structure after all: it saves area and keeps the branch/misalignment cone shorter than the separated version.
+
+Decision:
+
+- Reverted RTL to the accepted P10-S8 comparator-sharing structure (`Exu` exports `equal`, `less_signed`, and `less_unsigned`; `Core.v` uses them for `branch_taken`; `alu_src2` keeps the branch-special select).
+- After revert, `make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke` passed again with `NPC_SPEC_RESULT status=good reason=uart_eot cycles=57 limit=400`.
+- Do not retry this exact separate-branch-comparator structure in the current 3-stage pipeline.
+
+Follow-up recommendation:
+
+- The next useful timing work should not be another small comparator/ALU mux tweak in X. The failed P10-S9 and P10-S10 attempts both show that adding or moving logic around `xc_alu_result`, `xc_redirect`, or `xc_pc_exception` can easily disturb a tightly optimized cone.
+- If the goal is higher frequency, the next user-revised plan should consider a more explicit pipeline split or a different control/exception placement, with CPI impact addressed up front.
+- If the goal is area, look outside the X critical path first, such as `AxiMaster.v` counter/length widths or X/C packet fields that can be removed without adding new X-stage selects.
