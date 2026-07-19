@@ -73,46 +73,80 @@ module Core #(
   reg        halted;
   reg [1:0]  trap_status;
 
+  // F stage
   reg [31:0] f_pc;
   reg        ifu_pending;
   reg        drop_fetch_response;
 
-  reg        fx_valid;
-  reg [31:0] fx_pc;
-  reg [31:0] fx_inst;
-  reg        fx_inst_error;
+  // F/D boundary
+  reg        fd_valid;
+  reg [31:0] fd_pc;
+  reg [31:0] fd_inst;
+  reg        fd_inst_error;
 
-  reg        xc_valid;
-  reg [31:0] xc_pc;
+  // D/X boundary
+  reg        dx_valid;
+  reg [31:0] dx_pc;
+  reg [31:0] dx_inst;
+  reg        dx_inst_error;
+  reg [4:0]  dx_rd;
+  reg        dx_writes_rd;
+  reg [1:0]  dx_wb_sel;
+  reg        dx_mem_ren;
+  reg        dx_mem_wen;
+  reg [1:0]  dx_mem_size;
+  reg        dx_mem_unsigned;
+  reg [2:0]  dx_csr_cmd;
+  reg [11:0] dx_csr_addr;
+  reg [4:0]  dx_csr_uimm;
+  reg [31:0] dx_rs1_data;
+  reg [31:0] dx_rs2_data;
+  reg [31:0] dx_imm;
+  reg [3:0]  dx_alu_op;
+  reg [2:0]  dx_branch_op;
+  reg        dx_src1_pc;
+  reg        dx_src2_imm;
+  reg        dx_is_jal;
+  reg        dx_is_jalr;
+  reg        dx_is_mret;
+  reg        dx_is_fence_i;
+  reg        dx_decode_legal;
+  reg        dx_is_ecall;
+  reg        dx_is_ebreak;
+
+  // X/W boundary
+  reg        xw_valid;
+  reg [31:0] xw_pc;
 `ifdef NPC_DEBUG
-  reg [31:0] xc_inst;
+  reg [31:0] xw_inst;
+  reg        xw_redirect;
+  reg [31:0] xw_redirect_pc;
 `endif
-  reg        xc_inst_error;
-  reg [4:0]  xc_rd;
-  reg        xc_writes_rd;
-  reg [1:0]  xc_wb_sel;
-  reg        xc_mem_ren;
-  reg        xc_mem_wen;
-  reg [1:0]  xc_mem_size;
-  reg        xc_mem_unsigned;
-  reg [2:0]  xc_csr_cmd;
-  reg [11:0] xc_csr_addr;
-  reg [4:0]  xc_csr_uimm;
-  reg [31:0] xc_csr_rdata;
-  reg [31:0] xc_rs1_data;
-  reg [31:0] xc_rs2_data;
-  reg [31:0] xc_alu_result;
-  reg [31:0] xc_lsu_addr;
-  reg        xc_redirect;
-  reg [31:0] xc_redirect_pc;
-  reg        xc_is_mret;
-  reg        xc_is_fence_i;
-  reg        xc_decode_legal;
-  reg        xc_pc_exception;
-  reg        xc_mem_misaligned;
-  reg        xc_is_ecall;
-  reg        xc_is_ebreak;
+  reg        xw_inst_error;
+  reg [4:0]  xw_rd;
+  reg        xw_writes_rd;
+  reg [1:0]  xw_wb_sel;
+  reg        xw_mem_ren;
+  reg        xw_mem_wen;
+  reg [1:0]  xw_mem_size;
+  reg        xw_mem_unsigned;
+  reg [2:0]  xw_csr_cmd;
+  reg [11:0] xw_csr_addr;
+  reg [4:0]  xw_csr_uimm;
+  reg [31:0] xw_csr_rdata;
+  reg [31:0] xw_rs1_data;
+  reg [31:0] xw_rs2_data;
+  reg [31:0] xw_alu_result;
+  reg [31:0] xw_lsu_addr;
+  reg        xw_is_mret;
+  reg        xw_is_fence_i;
+  reg        xw_decode_legal;
+  reg        xw_pc_exception;
+  reg        xw_mem_misaligned;
+  reg        xw_is_ecall;
+  reg        xw_is_ebreak;
 
+  // D-stage decode wires (from fd_inst)
   wire [6:0]  opcode;
   wire [4:0]  rd;
   wire [2:0]  funct3;
@@ -145,32 +179,49 @@ module Core #(
   wire        is_jalr;
   wire        is_legal;
 
+  // D-stage data path
   wire [31:0] rf_rs1_data;
   wire [31:0] rf_rs2_data;
+  wire [31:0] d_rs1_data;
+  wire [31:0] d_rs2_data;
+  wire [31:0] imm_data;
+
+  // X-stage data path
+  wire        x_valid;
+  wire [31:0] x_pc;
   wire [31:0] x_rs1_data;
   wire [31:0] x_rs2_data;
-  wire [31:0] x_pc;
-  wire [31:0] x_inst;
-  wire        x_inst_error;
-  wire        x_valid;
-  wire [31:0] imm_data;
-  wire [31:0] alu_src1;
-  wire [31:0] alu_src2;
-  wire [31:0] alu_result;
-  wire        alu_equal;
-  wire        alu_less_signed;
-  wire        alu_less_unsigned;
+  wire [31:0] x_imm;
+  wire [31:0] x_imm_b;
+  wire [31:0] x_imm_j;
+  wire [31:0] x_alu_src1;
+  wire [31:0] x_alu_src2;
+  wire [31:0] x_alu_result;
+  wire [31:0] exu_result;
+  wire        x_alu_equal;
+  wire        x_alu_less_signed;
+  wire        x_alu_less_unsigned;
 
-  wire        ifu_bus_valid;
-  wire [31:0] ifu_bus_addr;
-  wire [7:0]  ifu_bus_len;
-  wire        ifu_bus_ready;
-  wire [31:0] ifu_bus_rdata;
-  wire        ifu_bus_error;
-  wire        ifu_inst_ready;
-  wire [31:0] ifu_inst;
-  wire        ifu_inst_error;
+  // Shared adder in X stage
+  wire [31:0] adder_src1;
+  wire [31:0] adder_src2;
+  wire        adder_sub;
+  wire [31:0] adder_result;
 
+  // Branch/jump/LSU computed in X
+  wire [31:0] x_lsu_addr;
+  wire [31:0] x_jalr_target;
+  wire [31:0] x_jal_target;
+  wire [31:0] x_branch_target;
+  wire        x_branch_taken;
+  wire        x_redirect;
+  wire [31:0] x_redirect_pc;
+  wire        x_pc_exception;
+  wire        x_mem_half_misaligned;
+  wire        x_mem_word_misaligned;
+  wire        x_mem_misaligned;
+
+  // W-stage control/data
   wire [31:0] lsu_rdata;
   wire [31:0] lsu_write_addr;
   wire [31:0] lsu_write_data;
@@ -208,128 +259,192 @@ module Core #(
   wire [31:0] mstatus;
   wire [31:0] wb_data;
 
-  assign x_valid = fx_valid;
-  assign x_pc = fx_pc;
-  assign x_inst = fx_inst;
-  assign x_inst_error = fx_inst_error;
+  // -------------------------------------------------------------------------
+  // Stage validity
+  // -------------------------------------------------------------------------
+  assign x_valid = dx_valid;
+  assign x_pc = dx_pc;
+  assign x_rs1_data = dx_rs1_data;
+  assign x_rs2_data = dx_rs2_data;
+  assign x_imm = dx_imm;
 
-  wire        rd_is_rv32e = rd[4] == 1'b0;
-  wire        rs1_is_rv32e = rs1[4] == 1'b0;
-  wire        rs2_is_rv32e = rs2[4] == 1'b0;
-  wire        rd_valid = !writes_rd || rd_is_rv32e;
-  wire        rs1_valid = !reads_rs1 || rs1_is_rv32e;
-  wire        rs2_valid = !reads_rs2 || rs2_is_rv32e;
-  wire        decode_legal = is_legal && rd_valid && rs1_valid && rs2_valid;
-  wire        x_is_ecall = sys_cmd == `NPC_SYS_ECALL;
-  wire        x_is_ebreak = sys_cmd == `NPC_SYS_EBREAK;
-  wire        x_is_mret = sys_cmd == `NPC_SYS_MRET;
-  wire        x_is_fence_i = sys_cmd == `NPC_SYS_FENCE_I;
-  wire        branch_taken = (branch_op == `NPC_BR_BEQ)  ? alu_equal :
-                             (branch_op == `NPC_BR_BNE)  ? !alu_equal :
-                             (branch_op == `NPC_BR_BLT)  ? alu_less_signed :
-                             (branch_op == `NPC_BR_BGE)  ? !alu_less_signed :
-                             (branch_op == `NPC_BR_BLTU) ? alu_less_unsigned :
-                             (branch_op == `NPC_BR_BGEU) ? !alu_less_unsigned : 1'b0;
-  wire [31:0] jalr_target = (x_rs1_data + imm_i) & ~32'd1;
-  wire [31:0] jal_target = x_pc + imm_j;
-  wire [31:0] branch_target = x_pc + imm_b;
-  wire        x_redirect = x_is_mret || is_jalr || is_jal || branch_taken;
-  wire [31:0] x_redirect_pc = x_is_mret ? mepc :
-                               (is_jalr ? jalr_target :
-                                (is_jal ? jal_target : branch_target));
-  wire [31:0] x_lsu_addr = x_rs1_data + (mem_wen ? imm_s : imm_i);
-  wire        branch_target_misaligned = branch_taken && branch_target[1:0] != 2'b00;
-  wire        jal_target_misaligned = is_jal && jal_target[1:0] != 2'b00;
-  wire        jalr_target_misaligned = is_jalr && jalr_target[1:0] != 2'b00;
-  wire        x_pc_exception = decode_legal && (branch_target_misaligned || jal_target_misaligned || jalr_target_misaligned);
-  wire        x_mem_half_misaligned = mem_size == `NPC_MEM_HALF && x_lsu_addr[0] != 1'b0;
-  wire        x_mem_word_misaligned = mem_size == `NPC_MEM_WORD && x_lsu_addr[1:0] != 2'b00;
-  wire        x_mem_misaligned = (mem_ren || mem_wen) && (x_mem_half_misaligned || x_mem_word_misaligned);
+  // -------------------------------------------------------------------------
+  // Decode and immediate extraction in D stage
+  // -------------------------------------------------------------------------
+  assign imm_data = (imm_sel == `NPC_IMM_S) ? imm_s :
+                    (imm_sel == `NPC_IMM_B) ? imm_b :
+                    (imm_sel == `NPC_IMM_U) ? imm_u :
+                    (imm_sel == `NPC_IMM_J) ? imm_j : imm_i;
 
-  wire        c_base_trap_request = xc_inst_error || !xc_decode_legal || xc_pc_exception ||
-                                    xc_mem_misaligned || xc_is_ecall || xc_is_ebreak;
-  wire        c_can_complete_no_mem_fault = xc_valid && !xc_inst_error && xc_decode_legal &&
-                                            !xc_mem_misaligned && !xc_pc_exception && !xc_is_ecall &&
-                                            !(c_base_trap_request && mtvec != 32'd0);
-  wire        c_mem_access = c_can_complete_no_mem_fault && (xc_mem_ren || xc_mem_wen);
-  wire        c_mem_access_fault = c_mem_access && lsu_raw_ready && lsu_raw_error;
-  wire        c_trap_request = c_base_trap_request || c_mem_access_fault;
-  wire        c_precise_trap = c_trap_request && mtvec != 32'd0;
-  wire        c_bad_without_vector = c_trap_request && mtvec == 32'd0;
-  wire        c_complete_inst = c_can_complete_no_mem_fault && !c_mem_access_fault;
-  wire        c_mem_ready = !c_mem_access || lsu_raw_ready;
-  wire        c_retire_ready = !reset && !halted && xc_valid && c_mem_ready;
-  // Qualify the writeback enable with xc_rd != 0 so that instructions with
-  // rd=x0 never forward and never assert the register-file write enable.  This
-  // lets the forwarding match drop its explicit rs1/rs2 != 0 term, slightly
-  // shortening the dependency-check path.
-  wire        c_wb_wen = c_complete_inst && c_mem_ready && xc_writes_rd &&
-                         xc_rd != 5'd0 && !xc_is_mret;
-  wire        c_lsu_wen = c_can_complete_no_mem_fault && xc_mem_wen;
-  wire [31:0] c_exception_cause = xc_inst_error ? {27'd0, `NPC_EXC_INST_ACCESS_FAULT} :
-                                  !xc_decode_legal ? {27'd0, `NPC_EXC_ILLEGAL_INST} :
-                                  xc_pc_exception ? {27'd0, `NPC_EXC_INST_ADDR_MISALIGNED} :
-                                  (xc_mem_ren && xc_mem_misaligned) ? {27'd0, `NPC_EXC_LOAD_ADDR_MISALIGNED} :
-                                  (xc_mem_wen && xc_mem_misaligned) ? {27'd0, `NPC_EXC_STORE_ADDR_MISALIGNED} :
-                                  (xc_mem_ren && c_mem_access_fault) ? {27'd0, `NPC_EXC_LOAD_ACCESS_FAULT} :
-                                  (xc_mem_wen && c_mem_access_fault) ? {27'd0, `NPC_EXC_STORE_ACCESS_FAULT} :
-                                  xc_is_ecall ? {27'd0, `NPC_EXC_ECALL_M} :
-                                  xc_is_ebreak ? {27'd0, `NPC_EXC_BREAKPOINT} : 32'd0;
-  wire [31:0] c_pc_plus_4 = xc_pc + 32'd4;
-  wire [31:0] c_normal_next_pc = xc_redirect ? xc_redirect_pc : c_pc_plus_4;
-  wire [31:0] c_next_pc = c_precise_trap ? mtvec : (c_bad_without_vector ? xc_pc : c_normal_next_pc);
-  wire [31:0] c_wb_mux = (xc_wb_sel == `NPC_WB_MEM) ? lsu_rdata :
-                         ((xc_wb_sel == `NPC_WB_PC4) ? c_pc_plus_4 :
-                          ((xc_wb_sel == `NPC_WB_CSR) ? xc_csr_rdata : xc_alu_result));
-  wire [31:0] c_forward_data = c_wb_mux;
-  wire        c_can_forward = xc_valid && c_wb_wen;
-  wire        c_rs1_match = reads_rs1 && xc_rd == rs1;
-  wire        c_rs2_match = reads_rs2 && xc_rd == rs2;
-  wire        c_load_waiting = xc_valid && xc_mem_ren && !c_mem_ready;
-  wire        load_use_stall = c_load_waiting && xc_writes_rd && (c_rs1_match || c_rs2_match);
-  wire        c_stage_stall = xc_valid && !c_mem_ready;
-  wire        x_can_advance = x_valid && !c_stage_stall && !load_use_stall && (!xc_valid || c_retire_ready);
-  wire        redirect = c_retire_ready && (c_precise_trap || c_bad_without_vector || xc_redirect ||
-                                           (c_complete_inst && xc_is_fence_i));
-  wire        fx_can_accept = !fx_valid || x_can_advance || redirect;
-  wire        ifu_fetch_valid = !halted && !reset && !fx_valid && !drop_fetch_response && !redirect;
-  wire        ifu_invalidate = c_retire_ready && c_complete_inst && xc_is_fence_i;
+  // Branch/jump immediates are extracted from the stored instruction in X.
+  // These are pure bit-slicing with no logic delay.
+  assign x_imm_b = {{20{dx_inst[31]}}, dx_inst[7], dx_inst[30:25], dx_inst[11:8], 1'b0};
+  assign x_imm_j = {{12{dx_inst[31]}}, dx_inst[19:12], dx_inst[20], dx_inst[30:21], 1'b0};
 
+  // -------------------------------------------------------------------------
+  // D-stage operand forwarding from W stage
+  // -------------------------------------------------------------------------
+  assign d_rs1_data = (w_can_forward && w_rs1_match) ? w_forward_data : rf_rs1_data;
+  assign d_rs2_data = (w_can_forward && w_rs2_match) ? w_forward_data : rf_rs2_data;
+
+  // -------------------------------------------------------------------------
+  // X-stage ALU inputs
+  // -------------------------------------------------------------------------
+  assign x_alu_src1 = dx_src1_pc ? x_pc : x_rs1_data;
+  // Branches must compare rs1 against rs2, not the I-immediate.
+  assign x_alu_src2 = (dx_branch_op != `NPC_BR_NONE) ? x_rs2_data :
+                      (dx_src2_imm ? x_imm : x_rs2_data);
+
+  // -------------------------------------------------------------------------
+  // X-stage shared adder: one 32-bit adder serves ALU ADD/SUB, LSU address,
+  // branch target, jal target, and jalr target.  The select signals all come
+  // from the registered D/X control word.
+  // -------------------------------------------------------------------------
+  assign adder_src1 = (dx_branch_op != `NPC_BR_NONE) ? x_pc :
+                      (dx_is_jal) ? x_pc :
+                      (dx_is_jalr) ? x_rs1_data :
+                      (dx_mem_ren || dx_mem_wen) ? x_rs1_data : x_alu_src1;
+  assign adder_src2 = (dx_branch_op != `NPC_BR_NONE) ? x_imm_b :
+                      (dx_is_jal) ? x_imm_j :
+                      (dx_is_jalr) ? x_imm :
+                      (dx_mem_ren || dx_mem_wen) ? x_imm : x_alu_src2;
+  assign adder_sub = (dx_alu_op == `NPC_ALU_SUB);
+  assign adder_result = adder_sub ? (adder_src1 - adder_src2) : (adder_src1 + adder_src2);
+
+  // ALU uses the shared adder for ADD/SUB; other operations come from Exu.
+  assign x_alu_result = (dx_alu_op == `NPC_ALU_ADD || dx_alu_op == `NPC_ALU_SUB) ?
+                        adder_result : exu_result;
+
+  assign x_lsu_addr = adder_result;
+  assign x_branch_target = adder_result;
+  assign x_jal_target = adder_result;
+  assign x_jalr_target = adder_result & ~32'd1;
+
+  // -------------------------------------------------------------------------
+  // Branch comparison and redirect (resolved in X stage)
+  // -------------------------------------------------------------------------
+  assign x_branch_taken = (dx_branch_op == `NPC_BR_BEQ)  ? x_alu_equal :
+                          (dx_branch_op == `NPC_BR_BNE)  ? !x_alu_equal :
+                          (dx_branch_op == `NPC_BR_BLT)  ? x_alu_less_signed :
+                          (dx_branch_op == `NPC_BR_BGE)  ? !x_alu_less_signed :
+                          (dx_branch_op == `NPC_BR_BLTU) ? x_alu_less_unsigned :
+                          (dx_branch_op == `NPC_BR_BGEU) ? !x_alu_less_unsigned : 1'b0;
+  assign x_redirect = x_valid && (dx_is_mret || dx_is_jalr || dx_is_jal || x_branch_taken);
+  assign x_redirect_pc = dx_is_mret ? mepc :
+                         (dx_is_jalr ? x_jalr_target :
+                          (dx_is_jal ? x_jal_target : x_branch_target));
+
+  // -------------------------------------------------------------------------
+  // X-stage exception pre-computation
+  // -------------------------------------------------------------------------
+  assign x_mem_half_misaligned = dx_mem_size == `NPC_MEM_HALF && x_lsu_addr[0] != 1'b0;
+  assign x_mem_word_misaligned = dx_mem_size == `NPC_MEM_WORD && x_lsu_addr[1:0] != 2'b00;
+  assign x_mem_misaligned = (dx_mem_ren || dx_mem_wen) && (x_mem_half_misaligned || x_mem_word_misaligned);
+  assign x_pc_exception = dx_decode_legal &&
+                          ((x_branch_taken && x_branch_target[1:0] != 2'b00) ||
+                           (dx_is_jal && x_jal_target[1:0] != 2'b00) ||
+                           (dx_is_jalr && x_jalr_target[1:0] != 2'b00));
+
+  // -------------------------------------------------------------------------
+  // W-stage control
+  // -------------------------------------------------------------------------
+  wire        w_base_trap_request = xw_inst_error || !xw_decode_legal || xw_pc_exception ||
+                                    xw_mem_misaligned || xw_is_ecall || xw_is_ebreak;
+  wire        w_can_complete_no_mem_fault = xw_valid && !xw_inst_error && xw_decode_legal &&
+                                            !xw_mem_misaligned && !xw_pc_exception && !xw_is_ecall &&
+                                            !(w_base_trap_request && mtvec != 32'd0);
+  wire        w_mem_access = w_can_complete_no_mem_fault && (xw_mem_ren || xw_mem_wen);
+  wire        w_mem_access_fault = w_mem_access && lsu_raw_ready && lsu_raw_error;
+  wire        w_trap_request = w_base_trap_request || w_mem_access_fault;
+  wire        w_precise_trap = w_trap_request && mtvec != 32'd0;
+  wire        w_bad_without_vector = w_trap_request && mtvec == 32'd0;
+  wire        w_complete_inst = w_can_complete_no_mem_fault && !w_mem_access_fault;
+  wire        w_mem_ready = !w_mem_access || lsu_raw_ready;
+  wire        w_retire_ready = !reset && !halted && xw_valid && w_mem_ready;
+  wire        w_wb_wen = w_complete_inst && w_mem_ready && xw_writes_rd &&
+                         xw_rd != 5'd0 && !xw_is_mret;
+  wire        w_lsu_wen = w_can_complete_no_mem_fault && xw_mem_wen;
+  wire [31:0] w_exception_cause = xw_inst_error ? {27'd0, `NPC_EXC_INST_ACCESS_FAULT} :
+                                  !xw_decode_legal ? {27'd0, `NPC_EXC_ILLEGAL_INST} :
+                                  xw_pc_exception ? {27'd0, `NPC_EXC_INST_ADDR_MISALIGNED} :
+                                  (xw_mem_ren && xw_mem_misaligned) ? {27'd0, `NPC_EXC_LOAD_ADDR_MISALIGNED} :
+                                  (xw_mem_wen && xw_mem_misaligned) ? {27'd0, `NPC_EXC_STORE_ADDR_MISALIGNED} :
+                                  (xw_mem_ren && w_mem_access_fault) ? {27'd0, `NPC_EXC_LOAD_ACCESS_FAULT} :
+                                  (xw_mem_wen && w_mem_access_fault) ? {27'd0, `NPC_EXC_STORE_ACCESS_FAULT} :
+                                  xw_is_ecall ? {27'd0, `NPC_EXC_ECALL_M} :
+                                  xw_is_ebreak ? {27'd0, `NPC_EXC_BREAKPOINT} : 32'd0;
+  wire [31:0] w_pc_plus_4 = xw_pc + 32'd4;
+  wire [31:0] w_next_pc = w_precise_trap ? mtvec : (w_bad_without_vector ? xw_pc : w_pc_plus_4);
+  wire [31:0] w_wb_mux = (xw_wb_sel == `NPC_WB_MEM) ? lsu_rdata :
+                         ((xw_wb_sel == `NPC_WB_PC4) ? w_pc_plus_4 :
+                          ((xw_wb_sel == `NPC_WB_CSR) ? xw_csr_rdata : xw_alu_result));
+  assign wb_data = w_wb_mux;
+  wire [31:0] w_forward_data = w_wb_mux;
+  wire        w_can_forward = xw_valid && w_wb_wen;
+  wire        w_rs1_match = reads_rs1 && xw_rd == rs1;
+  wire        w_rs2_match = reads_rs2 && xw_rd == rs2;
+
+  // -------------------------------------------------------------------------
+  // Pipeline stall / advancement control
+  // -------------------------------------------------------------------------
+  wire        w_load_waiting = xw_valid && xw_mem_ren && !w_mem_ready;
+  wire        load_use_stall = w_load_waiting && xw_writes_rd && (w_rs1_match || w_rs2_match);
+  wire        w_stage_stall = xw_valid && !w_mem_ready;
+  wire        x_can_advance = x_valid && !w_stage_stall && (!xw_valid || w_retire_ready);
+  wire        d_can_advance = fd_valid && !w_stage_stall && !load_use_stall && (!x_valid || x_can_advance);
+  wire        fd_can_accept = !fd_valid || d_can_advance;
+  wire        w_redirect = w_retire_ready && (w_precise_trap || w_bad_without_vector ||
+                                             (w_complete_inst && xw_is_fence_i));
+  wire        redirect = x_redirect || w_redirect;
+
+  // -------------------------------------------------------------------------
+  // IFU interface
+  // -------------------------------------------------------------------------
+  wire        ifu_bus_valid;
+  wire [31:0] ifu_bus_addr;
+  wire [7:0]  ifu_bus_len;
+  wire        ifu_bus_ready;
+  wire [31:0] ifu_bus_rdata;
+  wire        ifu_bus_error;
+  wire        ifu_inst_ready;
+  wire [31:0] ifu_inst;
+  wire        ifu_inst_error;
+
+  wire        ifu_fetch_valid = !halted && !reset && !fd_valid && !drop_fetch_response && !redirect;
+  wire        ifu_invalidate = w_retire_ready && w_complete_inst && xw_is_fence_i;
+
+  // -------------------------------------------------------------------------
+  // LSU / CLINT / AXI wiring (now driven from W stage)
+  // -------------------------------------------------------------------------
   assign lsu_is_clint = lsu_raw_valid && (lsu_raw_addr[31:16] == 16'h0200);
   assign lsu_arb_valid = lsu_raw_valid && !lsu_is_clint;
   assign lsu_raw_ready = lsu_is_clint ? clint_ready : lsu_arb_ready;
   assign lsu_raw_rdata = lsu_is_clint ? clint_rdata : lsu_arb_rdata;
   assign lsu_raw_error = lsu_is_clint ? clint_error : lsu_arb_error;
 
-  assign imm_data = (imm_sel == `NPC_IMM_S) ? imm_s :
-                    (imm_sel == `NPC_IMM_B) ? imm_b :
-                    (imm_sel == `NPC_IMM_U) ? imm_u :
-                    (imm_sel == `NPC_IMM_J) ? imm_j : imm_i;
-  assign alu_src1 = src1_pc ? x_pc : x_rs1_data;
-  assign alu_src2 = (branch_op != `NPC_BR_NONE) ? x_rs2_data : (src2_imm ? imm_data : x_rs2_data);
-  assign x_rs1_data = (c_can_forward && c_rs1_match) ? c_forward_data : rf_rs1_data;
-  assign x_rs2_data = (c_can_forward && c_rs2_match) ? c_forward_data : rf_rs2_data;
-
+  // -------------------------------------------------------------------------
+  // Debug / commit outputs (NPC_DEBUG only)
+  // -------------------------------------------------------------------------
 `ifdef NPC_DEBUG
-  assign debug_pc = xc_valid ? xc_pc : (fx_valid ? fx_pc : f_pc);
+  assign debug_pc = xw_valid ? xw_pc : (dx_valid ? dx_pc : (fd_valid ? fd_pc : f_pc));
   assign debug_halted = halted;
   assign debug_trap_status = trap_status;
-  assign debug_inst = xc_valid ? xc_inst : (fx_valid ? fx_inst : 32'd0);
+  assign debug_inst = xw_valid ? xw_inst : (dx_valid ? dx_inst : (fd_valid ? fd_inst : 32'd0));
   assign debug_mstatus = mstatus;
   assign debug_mtvec = mtvec;
   assign debug_mepc = mepc;
   assign debug_mcause = mcause;
-  assign commit_valid = c_retire_ready;
-  assign commit_pc = xc_pc;
-  assign commit_inst = xc_inst;
-  assign commit_next_pc = c_next_pc;
-  assign commit_wen = c_wb_wen;
-  assign commit_rd = xc_rd;
+  assign commit_valid = w_retire_ready;
+  assign commit_pc = xw_pc;
+  assign commit_inst = xw_inst;
+  assign commit_next_pc = xw_redirect ? xw_redirect_pc : w_next_pc;
+  assign commit_wen = w_wb_wen;
+  assign commit_rd = xw_rd;
   assign commit_wdata = wb_data;
-  assign commit_exception = c_bad_without_vector || xc_inst_error || c_mem_access_fault;
-  assign commit_cause = c_exception_cause;
-  assign commit_mem_wen = c_retire_ready && c_lsu_wen;
-  assign commit_mem_ren = c_retire_ready && c_complete_inst && xc_mem_ren;
+  assign commit_exception = w_bad_without_vector || xw_inst_error || w_mem_access_fault;
+  assign commit_cause = w_exception_cause;
+  assign commit_mem_wen = w_retire_ready && w_lsu_wen;
+  assign commit_mem_ren = w_retire_ready && w_complete_inst && xw_mem_ren;
   assign commit_mem_addr = lsu_write_addr;
   assign commit_mem_wdata = lsu_write_data;
   assign commit_mem_wmask = lsu_write_mask;
@@ -360,6 +475,9 @@ module Core #(
   assign commit_mem_rdata = 32'd0;
 `endif
 
+  // -------------------------------------------------------------------------
+  // Submodules
+  // -------------------------------------------------------------------------
   Ifu u_ifu (
     .clock(clock),
     .reset(reset),
@@ -383,7 +501,7 @@ module Core #(
   );
 
   Idu u_idu (
-    .inst(x_inst),
+    .inst(fd_inst),
     .opcode(opcode),
     .rd(rd),
     .funct3(funct3),
@@ -424,8 +542,8 @@ module Core #(
     .raddr2(rs2[3:0]),
     .rdata1(rf_rs1_data),
     .rdata2(rf_rs2_data),
-    .wen(!reset && !halted && c_wb_wen),
-    .waddr(xc_rd[3:0]),
+    .wen(!reset && !halted && w_wb_wen),
+    .waddr(xw_rd[3:0]),
     .wdata(wb_data),
     .debug_x1(debug_x1),
     .debug_a0(debug_a0),
@@ -433,22 +551,22 @@ module Core #(
   );
 
   Exu u_exu (
-    .alu_op(alu_op),
-    .src1(alu_src1),
-    .src2(alu_src2),
-    .result(alu_result),
-    .equal(alu_equal),
-    .less_signed(alu_less_signed),
-    .less_unsigned(alu_less_unsigned)
+    .alu_op(dx_alu_op),
+    .src1(x_alu_src1),
+    .src2(x_alu_src2),
+    .result(exu_result),
+    .equal(x_alu_equal),
+    .less_signed(x_alu_less_signed),
+    .less_unsigned(x_alu_less_unsigned)
   );
 
   Lsu u_lsu (
-    .ren(!reset && !halted && c_can_complete_no_mem_fault && xc_mem_ren),
-    .wen(!reset && !halted && c_lsu_wen),
-    .size(xc_mem_size),
-    .load_unsigned(xc_mem_unsigned),
-    .addr(xc_lsu_addr),
-    .wdata(xc_rs2_data),
+    .ren(!reset && !halted && w_can_complete_no_mem_fault && xw_mem_ren),
+    .wen(!reset && !halted && w_lsu_wen),
+    .size(xw_mem_size),
+    .load_unsigned(xw_mem_unsigned),
+    .addr(xw_lsu_addr),
+    .wdata(xw_rs2_data),
     .bus_ready(lsu_raw_ready),
     .bus_rdata(lsu_raw_rdata),
     .bus_valid(lsu_raw_valid),
@@ -547,14 +665,14 @@ module Core #(
   Csr u_csr (
     .clock(clock),
     .reset(reset),
-    .addr(x_valid ? csr_addr : xc_csr_addr),
-    .cmd(x_valid ? csr_cmd : xc_csr_cmd),
-    .rs1_data(x_valid ? x_rs1_data : xc_rs1_data),
-    .uimm(x_valid ? csr_uimm : xc_csr_uimm),
-    .commit_en(c_retire_ready && c_complete_inst && xc_csr_cmd != `NPC_CSR_NONE),
-    .trap_en(c_retire_ready && c_precise_trap),
-    .trap_pc(xc_pc),
-    .trap_cause(c_exception_cause),
+    .addr(x_valid ? dx_csr_addr : xw_csr_addr),
+    .cmd(x_valid ? dx_csr_cmd : xw_csr_cmd),
+    .rs1_data(x_valid ? x_rs1_data : xw_rs1_data),
+    .uimm(x_valid ? dx_csr_uimm : xw_csr_uimm),
+    .commit_en(w_retire_ready && w_complete_inst && xw_csr_cmd != `NPC_CSR_NONE),
+    .trap_en(w_retire_ready && w_precise_trap),
+    .trap_pc(xw_pc),
+    .trap_cause(w_exception_cause),
     .rdata(csr_rdata),
     .mtvec(mtvec),
     .mepc(mepc),
@@ -562,8 +680,9 @@ module Core #(
     .mstatus(mstatus)
   );
 
-  assign wb_data = c_wb_mux;
-
+  // -------------------------------------------------------------------------
+  // Sequential pipeline update
+  // -------------------------------------------------------------------------
   always @(posedge clock) begin
     if (reset) begin
       halted <= 1'b0;
@@ -571,86 +690,142 @@ module Core #(
       f_pc <= reset_vector;
       ifu_pending <= 1'b0;
       drop_fetch_response <= 1'b0;
-      fx_valid <= 1'b0;
-      xc_valid <= 1'b0;
+      fd_valid <= 1'b0;
+      dx_valid <= 1'b0;
+      xw_valid <= 1'b0;
     end else begin
+      // IFU pending tracking
       if (ifu_inst_ready) begin
         ifu_pending <= 1'b0;
       end else if (ifu_fetch_valid) begin
         ifu_pending <= 1'b1;
       end
 
-      if (redirect) begin
-        f_pc <= c_next_pc;
-        fx_valid <= 1'b0;
+      // Redirect: W-stage traps / fence.i have priority over X-stage branches.
+      if (w_redirect) begin
+        f_pc <= w_next_pc;
+        fd_valid <= 1'b0;
+        dx_valid <= 1'b0;
+        xw_valid <= 1'b0;
+        drop_fetch_response <= ifu_pending && !ifu_inst_ready;
+      end else if (x_redirect) begin
+        f_pc <= x_redirect_pc;
+        fd_valid <= 1'b0;
+        dx_valid <= 1'b0;
         drop_fetch_response <= ifu_pending && !ifu_inst_ready;
       end else if (ifu_inst_ready && drop_fetch_response) begin
         drop_fetch_response <= 1'b0;
-      end else if (ifu_inst_ready && fx_can_accept) begin
-        fx_valid <= 1'b1;
-        fx_pc <= f_pc;
-        fx_inst <= ifu_inst;
-        fx_inst_error <= ifu_inst_error;
+      end else if (ifu_inst_ready && fd_can_accept) begin
+        fd_valid <= 1'b1;
+        fd_pc <= f_pc;
+        fd_inst <= ifu_inst;
+        fd_inst_error <= ifu_inst_error;
         f_pc <= f_pc + 32'd4;
-      end else if (x_can_advance) begin
-        fx_valid <= 1'b0;
+      end else if (d_can_advance) begin
+        fd_valid <= 1'b0;
       end
 
-      if (!halted && c_retire_ready && c_bad_without_vector) begin
+      // Halt on bad trap without vector
+      if (!halted && w_retire_ready && w_bad_without_vector) begin
         halted <= 1'b1;
         trap_status <= `NPC_STATUS_BAD;
       end
 
-      if (c_stage_stall || load_use_stall) begin
-        xc_valid <= xc_valid;
+      // D/X boundary update
+      if (w_redirect || x_redirect) begin
+        dx_valid <= 1'b0;
+      end else if (w_stage_stall || load_use_stall) begin
+        dx_valid <= dx_valid;
+      end else if (d_can_advance) begin
+        dx_valid <= 1'b1;
+        dx_pc <= fd_pc;
+        dx_inst <= fd_inst;
+        dx_inst_error <= fd_inst_error;
+        dx_rd <= rd;
+        dx_writes_rd <= writes_rd;
+        dx_wb_sel <= wb_sel;
+        dx_mem_ren <= mem_ren;
+        dx_mem_wen <= mem_wen;
+        dx_mem_size <= mem_size;
+        dx_mem_unsigned <= mem_unsigned;
+        dx_csr_cmd <= csr_cmd;
+        dx_csr_addr <= csr_addr;
+        dx_csr_uimm <= csr_uimm;
+        dx_rs1_data <= d_rs1_data;
+        dx_rs2_data <= d_rs2_data;
+        dx_imm <= imm_data;
+        dx_alu_op <= alu_op;
+        dx_branch_op <= branch_op;
+        dx_src1_pc <= src1_pc;
+        dx_src2_imm <= src2_imm;
+        dx_is_jal <= is_jal;
+        dx_is_jalr <= is_jalr;
+        dx_is_mret <= sys_cmd == `NPC_SYS_MRET;
+        dx_is_fence_i <= sys_cmd == `NPC_SYS_FENCE_I;
+        dx_decode_legal <= is_legal && rd_valid && rs1_valid && rs2_valid;
+        dx_is_ecall <= sys_cmd == `NPC_SYS_ECALL;
+        dx_is_ebreak <= sys_cmd == `NPC_SYS_EBREAK;
       end else if (x_can_advance) begin
-        xc_valid <= 1'b1;
-        xc_pc <= x_pc;
-`ifdef NPC_DEBUG
-        xc_inst <= x_inst;
-`endif
-        xc_inst_error <= x_inst_error;
-        xc_rd <= rd;
-        xc_writes_rd <= writes_rd;
-        xc_wb_sel <= wb_sel;
-        xc_mem_ren <= mem_ren;
-        xc_mem_wen <= mem_wen;
-        xc_mem_size <= mem_size;
-        xc_mem_unsigned <= mem_unsigned;
-        xc_csr_cmd <= csr_cmd;
-        xc_csr_addr <= csr_addr;
-        xc_csr_uimm <= csr_uimm;
-        xc_csr_rdata <= csr_rdata;
-        xc_rs1_data <= x_rs1_data;
-        xc_rs2_data <= x_rs2_data;
-        xc_alu_result <= alu_result;
-        xc_lsu_addr <= x_lsu_addr;
-        xc_redirect <= x_redirect;
-        xc_redirect_pc <= x_redirect_pc;
-        xc_is_mret <= x_is_mret;
-        xc_is_fence_i <= x_is_fence_i;
-        xc_decode_legal <= decode_legal;
-        xc_pc_exception <= x_pc_exception;
-        xc_mem_misaligned <= x_mem_misaligned;
-        xc_is_ecall <= x_is_ecall;
-        xc_is_ebreak <= x_is_ebreak;
-      end else if (c_retire_ready) begin
-        xc_valid <= 1'b0;
+        dx_valid <= 1'b0;
       end
 
-      if (redirect) begin
-        if (x_can_advance) begin
-          xc_valid <= 1'b0;
-        end
+      // X/W boundary update
+      if (w_redirect) begin
+        xw_valid <= 1'b0;
+      end else if (w_stage_stall) begin
+        xw_valid <= xw_valid;
+      end else if (x_can_advance) begin
+        xw_valid <= 1'b1;
+        xw_pc <= x_pc;
+`ifdef NPC_DEBUG
+        xw_inst <= dx_inst;
+        xw_redirect <= x_redirect;
+        xw_redirect_pc <= x_redirect_pc;
+`endif
+        xw_inst_error <= dx_inst_error;
+        xw_rd <= dx_rd;
+        xw_writes_rd <= dx_writes_rd;
+        xw_wb_sel <= dx_wb_sel;
+        xw_mem_ren <= dx_mem_ren;
+        xw_mem_wen <= dx_mem_wen;
+        xw_mem_size <= dx_mem_size;
+        xw_mem_unsigned <= dx_mem_unsigned;
+        xw_csr_cmd <= dx_csr_cmd;
+        xw_csr_addr <= dx_csr_addr;
+        xw_csr_uimm <= dx_csr_uimm;
+        xw_csr_rdata <= csr_rdata;
+        xw_rs1_data <= x_rs1_data;
+        xw_rs2_data <= x_rs2_data;
+        xw_alu_result <= x_alu_result;
+        xw_lsu_addr <= x_lsu_addr;
+        xw_is_mret <= dx_is_mret;
+        xw_is_fence_i <= dx_is_fence_i;
+        xw_decode_legal <= dx_decode_legal;
+        xw_pc_exception <= x_pc_exception;
+        xw_mem_misaligned <= x_mem_misaligned;
+        xw_is_ecall <= dx_is_ecall;
+        xw_is_ebreak <= dx_is_ebreak;
+      end else if (w_retire_ready) begin
+        xw_valid <= 1'b0;
       end
     end
   end
+
+  // -------------------------------------------------------------------------
+  // D-stage decode legality helper
+  // -------------------------------------------------------------------------
+  wire        rd_is_rv32e = rd[4] == 1'b0;
+  wire        rs1_is_rv32e = rs1[4] == 1'b0;
+  wire        rs2_is_rv32e = rs2[4] == 1'b0;
+  wire        rd_valid = !writes_rd || rd_is_rv32e;
+  wire        rs1_valid = !reads_rs1 || rs1_is_rv32e;
+  wire        rs2_valid = !reads_rs2 || rs2_is_rv32e;
 
 `ifdef NPC_DEBUG
   wire unused = |{opcode, funct3, funct7, mcause, mstatus, trap_status};
 `else
   wire unused = |{opcode, funct3, funct7, mcause, mstatus, trap_status,
-                 lsu_write_addr, lsu_write_data, lsu_write_mask};
+                 lsu_write_addr, lsu_write_data, lsu_write_mask, dx_inst[6:0]};
 `endif
 
 endmodule

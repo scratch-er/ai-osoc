@@ -1558,3 +1558,165 @@ Stop for user revision, as requested. If the user approves continuing, do not im
 - Re-check current STA endpoints first: after P10-S8 the worst max endpoint is `xc_alu_result_20__reg_p:D` at `1.419 ns`, not the removed `xc_normal_next_pc` path.
 
 `notes/p10-design-review.md` contains the full module-by-module hardware-mapping analysis and all three attempt results.
+
+
+## Phase 10 Session 9: 4-stage IF-ID-EX-WB pipeline with shared adder and redirect-state reduction
+
+Date: 2026-07-19
+Platform: Linux
+
+### Starting point
+
+P10-S8 3-stage pipeline point:
+- Area `22528.520000`, DFFs `1476`, ICGs `17`
+- Clean checked target `680 MHz` under `icsprout55`
+- Critical path: F/X instruction register → RegFile read → forwarding mux → ALU → `xc_alu_result`
+
+### Analysis and optimization rationale
+
+The previous optimizations only shaved small delays because the fundamental problem was structural: the X stage contained decode, register-file read, operand forwarding, ALU, branch comparison, target selection, LSU address, and CSR read all in one cycle. The register-file read plus ALU formed a ~1.4 ns combinational chain.
+
+To make a large timing improvement, the chain must be cut by a pipeline register. The chosen approach is a clean **4-stage IF-ID-EX-WB pipeline**:
+
+- **F**: fetch (unchanged IFU interface).
+- **D**: decode `fd_inst`, read the register file, apply W→D operand forwarding, capture operands and control into the D/X boundary.
+- **X**: execute — ALU, branch/jump comparison and target selection, LSU address, CSR read. Branches/jumps/`mret` redirect from this stage.
+- **W**: memory access, writeback mux, CSR commit, trap handling, register-file write. Traps and `fence.i` redirect from this stage.
+
+Key structural decisions:
+
+1. **Branch/jump resolved in X, not D.** Resolving in D would require forwarding an X-stage ALU result back into D in the same cycle, recreating a long path. Resolving in X keeps D short and still gives only a 1-cycle taken-branch penalty (the instruction in D is flushed).
+2. **Single shared adder in X.** The previous design had separate adders for ALU ADD/SUB, LSU address, `jalr_target`, `jal_target`, and `branch_target`. All of these are produced in X, so they share one 32-bit adder with input muxing. The comparator shares the same input mux.
+3. **Remove redirect state from the spec-mode X/W packet.** Because branches/jumps redirect in X, the target is consumed immediately. `xw_redirect` and `xw_redirect_pc` are kept only in `NPC_DEBUG=1` for DiffTest/debug output; `NPC_DEBUG=0` synthesis drops them.
+
+### Implementation
+
+Changed `npc/rtl/core/Core.v` only:
+- Added F/D and D/X register sets; renamed X/C to X/W.
+- Moved `Idu` decode and `RegFile` read to D stage.
+- Added W→D operand forwarding and W-stage load-use stall detection.
+- Implemented shared adder and target selection in X.
+- Moved branch/jump/`mret` redirect to X; traps/`fence.i` redirect remain in W.
+- Updated debug/commit outputs to use `xw_redirect`/`xw_redirect_pc` for `commit_next_pc`.
+
+No functional changes to `Ifu.v`, `Idu.v`, `Exu.v`, `RegFile.v`, `Csr.v`, `Lsu.v`, `Clint.v`, `AxiArbiter.v`, `AxiMaster.v`, or `NPC.v`.
+
+### Bugs fixed during validation
+
+1. `x_redirect` was not gated by `x_valid`. After a redirect, stale D/X control bits kept `x_redirect` asserted for extra cycles, deadlocking fetch.
+2. Branch comparison used `dx_src2_imm`, which is `1` for branches, causing the comparator to compare `rs1` against the I-immediate instead of `rs2`. Forced `x_alu_src2 = x_rs2_data` for branch instructions.
+3. `commit_next_pc` initially used only `w_next_pc`, which is `pc+4` for non-trap instructions. DiffTest requires the actual redirect target for branches/jumps, so `xw_redirect`/`xw_redirect_pc` were restored (debug-only).
+
+### Validation completed
+
+1. Spec-mode smoke passed:
+   ```sh
+   make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke
+   ```
+   Result: `NPC_SPEC_RESULT status=good reason=uart_eot cycles=63 limit=400`.
+
+2. Full directed debug/DiffTest regression passed:
+   ```sh
+   make -C npc clean && make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
+     test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest \
+     test-clint test-icache test-fencei test-access-fault \
+     REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+   ```
+
+3. Full 35-test `cpu-tests` sweep with NEMU event DiffTest passed:
+   - `add`, `add-longlong`, `bit`, `bubble-sort`, `crc32`, `div`, `dummy`, `fact`, `fib`, `goldbach`, `hello-str`, `if-else`, `leap-year`, `load-store`, `matrix-mul`, `max`, `mersenne`, `min3`, `mov-c`, `movsx`, `mul-longlong`, `narcissistic`, `pascal`, `prime`, `quick-sort`, `recursion`, `select-sort`, `shift`, `string`, `sub-longlong`, `sum`, `switch`, `to-lower-case`, `unalign`, `wanshu`.
+
+4. RT-Thread scripted shell `halt` passed with NEMU event DiffTest:
+   ```sh
+   make -C rt-thread-am/bsp/abstract-machine ARCH=riscv32e-npc \
+     AM_HOME=/host/Workspace/ai-ysyx/abstract-machine \
+     CROSS_COMPILE=riscv64-linux-gnu- NPC_MAX_CYCLES=12000000 \
+     NPC_DIFFTEST_REF=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+   ```
+   Result: `NEMU_RESULT status=good ... insts=511842`; `NPC_RESULT status=good reason=good_trap cycles=1955726 insts=511842`.
+
+5. SoC regression passed:
+   ```sh
+   make -C npc soc-smoke test-soc-difftest test-soc-mem \
+     REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+   ```
+
+### PPA / timing result
+
+Synthesis/STA command:
+```sh
+make -C npc sta-sweep \
+  STA_O=../build/p10-4stage/ppa \
+  STA_LOG_DIR=../build/p10-4stage/logs \
+  STA_FREQS="600 650 700 750 760 770 780 790 800 850"
+```
+
+| Frequency | Worst slack | Worst endpoint | Reported Fmax |
+| ---: | ---: | --- | ---: |
+| 600 MHz | +0.378 ns | `u_core.f_pc_27__reg_p:D` | 776.410 MHz |
+| 650 MHz | +0.250 ns | `u_core.f_pc_27__reg_p:D` | 776.410 MHz |
+| 700 MHz | +0.140 ns | `u_core.f_pc_27__reg_p:D` | 776.410 MHz |
+| 750 MHz | +0.045 ns | `u_core.f_pc_27__reg_p:D` | 776.410 MHz |
+| 760 MHz | +0.027 ns | `u_core.f_pc_27__reg_p:D` | 776.410 MHz |
+| 770 MHz | +0.010 ns | `u_core.f_pc_27__reg_p:D` | 776.410 MHz |
+| 780 MHz | −0.006 ns | `u_core.f_pc_27__reg_p:D` | 776.410 MHz |
+| 790 MHz | −0.023 ns | `u_core.f_pc_27__reg_p:D` | 776.410 MHz |
+| 800 MHz | −0.038 ns | `u_core.f_pc_27__reg_p:D` | 776.410 MHz |
+| 850 MHz | −0.112 ns | `u_core.f_pc_27__reg_p:D` | 776.410 MHz |
+
+Synthesis result at 600 MHz:
+```text
+Chip area: 22122.240000
+Sequential area: not separately extracted in this run
+DFFQX1H7L: 1629
+ICGX0P5H7L: 19
+```
+
+Comparison against P10-S8:
+
+| Metric | P10-S8 | P10-S9 4-stage | Delta |
+| --- | ---: | ---: | ---: |
+| Area | `22528.520000` | `22122.240000` | −406.28 (−1.80%) |
+| DFFs | `1476` | `1629` | +153 (+10.4%) |
+| ICGs | `17` | `19` | +2 |
+| Clean target | `680 MHz` | `770 MHz` | +90 MHz (+13.2%) |
+| First failing | `690 MHz` | `780 MHz` | +90 MHz |
+| Worst path delay | ~1.47 ns (X→C) | 1.243 ns (X→F redirect) | −0.23 ns |
+
+### CPI / wall-clock trade-off
+
+The extra pipeline stage adds some CPI:
+
+| Workload | P10-S8 cycles | P10-S9 cycles | Δ cycles | Δ wall-clock @ new Fmax |
+| --- | ---: | ---: | ---: | ---: |
+| `cpu-tests/sum` | 1434 | 1640 | +14.4% | +1.0% |
+| `cpu-tests/string` | 4069 | 4541 | +11.6% | −1.7% |
+| `cpu-tests/matrix-mul` | 564293 | 570451 | +1.1% | −10.7% |
+| `cpu-tests/crc32` | 66820 | 68459 | +2.5% | −8.6% |
+| `cpu-tests/quick-sort` | 11859 | 12547 | +5.8% | −5.9% |
+| RT-Thread | 1807800 | 1955726 | +8.2% | −4.4% |
+
+For small programs the branch/fetch bubbles dominate, so wall-clock is flat or slightly worse. For larger programs the frequency gain dominates, so wall-clock improves by 4–11%.
+
+### Interpretation: is this attempt successful?
+
+Yes, with caveats.
+
+- **Timing**: success. Clean target improved from `680 MHz` to `770 MHz`. The shared adder and pipeline split did cut the old critical path.
+- **Area**: success. Total area decreased despite 153 extra DFFs for the new D/X boundary, because the shared adder removed four separate adder trees and the redirect state was removed from the spec-mode packet.
+- **CPI**: mixed. Small programs regressed; large programs improved in wall-clock.
+- **Structural insight**: the new critical path is the X→F redirect path (`D/X register → shared adder/branch comparator → f_pc`). This is the unavoidable cost of resolving branches in X and updating fetch in the same cycle. Further timing gains would require branch prediction/speculation to break that combinational path, or accepting a 2-cycle branch penalty by resolving branches later.
+
+### Files modified
+
+- `npc/rtl/core/Core.v`
+- `notes/next.md` (this entry)
+
+### Next steps
+
+1. Decide whether to keep the 4-stage point or revert to P10-S8. The 4-stage point is better in raw Fmax and area, but CPI regresses for small programs.
+2. If kept, the next timing bottleneck is the X→F redirect path. Options:
+   - Add a small branch target buffer / next-PC predictor to break the combinational redirect path.
+   - Explore whether resolving branches in D with a forwarded X result can be made faster.
+3. Area opportunities remaining: X/W packet specialization (e.g. `xw_rs1_data` only for CSR), but measure each change.
+4. CPI opportunities: fetch buffering, fairer IFU/LSU arbitration, but only after deciding the pipeline organization.
