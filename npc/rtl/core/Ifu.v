@@ -40,10 +40,6 @@ module Ifu (
   reg [26:0] miss_tag_q;
   reg [31:0] miss_line_addr_q;
   reg [1:0]  refill_beat_q;
-  reg [31:0] refill_word0_q;
-  reg [31:0] refill_word1_q;
-  reg [31:0] refill_word2_q;
-  reg [31:0] refill_word3_q;
   reg        refill_error_q;
 `ifdef NPC_DEBUG
   reg [63:0] accesses_q;
@@ -70,13 +66,17 @@ module Ifu (
   wire        refill_fire = state == S_REFILL && bus_ready;
   wire        refill_last = refill_fire && refill_beat_q == 2'd3;
   wire        refill_error = refill_error_q || bus_error;
-  wire [31:0] refill_word0 = (refill_beat_q == 2'd0 && refill_fire) ? bus_rdata : refill_word0_q;
-  wire [31:0] refill_word1 = (refill_beat_q == 2'd1 && refill_fire) ? bus_rdata : refill_word1_q;
-  wire [31:0] refill_word2 = (refill_beat_q == 2'd2 && refill_fire) ? bus_rdata : refill_word2_q;
-  wire [31:0] refill_word3 = (refill_beat_q == 2'd3 && refill_fire) ? bus_rdata : refill_word3_q;
-  wire [31:0] refill_inst = (miss_offset_q == 2'd0) ? refill_word0 :
-                            (miss_offset_q == 2'd1) ? refill_word1 :
-                            (miss_offset_q == 2'd2) ? refill_word2 : refill_word3;
+  // With direct per-beat cache writes, the requested word is either already in
+  // the data register (offsets 0-2 were written on earlier beats) or is the
+  // current beat data (offset 3, written this cycle and not yet visible via the
+  // flop output).
+  wire [31:0] refill_inst_set0 = (miss_offset_q == 2'd0) ? data0_0_q :
+                                 (miss_offset_q == 2'd1) ? data0_1_q :
+                                 (miss_offset_q == 2'd2) ? data0_2_q : bus_rdata;
+  wire [31:0] refill_inst_set1 = (miss_offset_q == 2'd0) ? data1_0_q :
+                                 (miss_offset_q == 2'd1) ? data1_1_q :
+                                 (miss_offset_q == 2'd2) ? data1_2_q : bus_rdata;
+  wire [31:0] refill_inst = miss_index_q ? refill_inst_set1 : refill_inst_set0;
   wire        unused = |pc[1:0];
 
   assign bus_valid = state == S_REFILL;
@@ -118,10 +118,6 @@ module Ifu (
       miss_tag_q <= 27'd0;
       miss_line_addr_q <= 32'd0;
       refill_beat_q <= 2'd0;
-      refill_word0_q <= 32'd0;
-      refill_word1_q <= 32'd0;
-      refill_word2_q <= 32'd0;
-      refill_word3_q <= 32'd0;
       refill_error_q <= 1'b0;
 `ifdef NPC_DEBUG
       accesses_q <= 64'd0;
@@ -154,10 +150,6 @@ module Ifu (
               miss_tag_q <= tag;
               miss_line_addr_q <= line_addr;
               refill_beat_q <= 2'd0;
-              refill_word0_q <= 32'd0;
-              refill_word1_q <= 32'd0;
-              refill_word2_q <= 32'd0;
-              refill_word3_q <= 32'd0;
               refill_error_q <= 1'b0;
             end
           end
@@ -171,12 +163,23 @@ module Ifu (
             refill_beats_q <= refill_beats_q + 64'd1;
 `endif
             refill_error_q <= refill_error;
-            case (refill_beat_q)
-              2'd0: refill_word0_q <= bus_rdata;
-              2'd1: refill_word1_q <= bus_rdata;
-              2'd2: refill_word2_q <= bus_rdata;
-              default: refill_word3_q <= bus_rdata;
-            endcase
+            // Write the beat directly into the selected cache data register.
+            // This eliminates the four 32-bit refill_word*_q shadow registers.
+            if (miss_index_q) begin
+              case (refill_beat_q)
+                2'd0: data1_0_q <= bus_rdata;
+                2'd1: data1_1_q <= bus_rdata;
+                2'd2: data1_2_q <= bus_rdata;
+                default: data1_3_q <= bus_rdata;
+              endcase
+            end else begin
+              case (refill_beat_q)
+                2'd0: data0_0_q <= bus_rdata;
+                2'd1: data0_1_q <= bus_rdata;
+                2'd2: data0_2_q <= bus_rdata;
+                default: data0_3_q <= bus_rdata;
+              endcase
+            end
             refill_beat_q <= refill_beat_q + 2'd1;
             if (refill_last) begin
               state <= S_IDLE;
@@ -184,17 +187,9 @@ module Ifu (
                 if (miss_index_q) begin
                   valid_q[1] <= !invalidate;
                   tag1_q <= miss_tag_q;
-                  data1_0_q <= refill_word0;
-                  data1_1_q <= refill_word1;
-                  data1_2_q <= refill_word2;
-                  data1_3_q <= refill_word3;
                 end else begin
                   valid_q[0] <= !invalidate;
                   tag0_q <= miss_tag_q;
-                  data0_0_q <= refill_word0;
-                  data0_1_q <= refill_word1;
-                  data0_2_q <= refill_word2;
-                  data0_3_q <= refill_word3;
                 end
               end
             end

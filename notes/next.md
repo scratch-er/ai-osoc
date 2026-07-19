@@ -1441,7 +1441,77 @@ Instead of adding pipeline stages, attack structural inefficiencies module by mo
 
 5. **CPI optimizations last** (prefetch buffer, fairer arbitration, branch prediction) once timing and area targets are met.
 
+## Phase 10 Session 7: CPI-neutral structural optimization attempts
+
+The session followed the user's requested discipline: first reason from RTL structure, then make one targeted optimization attempt, validate functionality, measure PPA, and record whether it actually helped.
+
+### Attempt 1: IFU refill shadow-register removal
+
+Implemented in `npc/rtl/core/Ifu.v` before the comparator-sharing work:
+
+- Removed the four 32-bit `refill_word*_q` shadow registers.
+- Refill beats now write directly into the selected cache data registers.
+- `refill_inst` is formed from already-written cache registers plus current `bus_rdata` for the last requested beat.
+
+Measured result against the reverted 3-stage baseline:
+
+- Area improved from `24119.2` to `22775.2` (`-1344.0`, about `-5.6%`).
+- DFF count dropped from `1603` to `1475`, exactly matching the 128-flop removal.
+- 620 MHz slack improved from about `-0.210 ns` to about `-0.060 ns`, but 620 MHz still did not close.
+
+Decision: keep this change. It is a real structural area win and does not introduce a CPI-cost mechanism.
+
+### Attempt 2: comparator sharing between branch logic and ALU
+
+Implemented in `npc/rtl/core/Exu.v` and `npc/rtl/core/Core.v`:
+
+- `Exu.v` exports `equal`, `less_signed`, and `less_unsigned`.
+- `SLT`/`SLTU` use the exported less-than facts.
+- `Core.v` branch-taken logic uses the same facts for `BEQ`/`BNE`/`BLT`/`BGE`/`BLTU`/`BGEU`.
+- Important fix: branch instructions must force `alu_src2 = x_rs2_data`; otherwise the shared comparison would compare `rs1` against the B-immediate because branch decode normally marks `src2_imm`.
+
+Validation after the fix:
+
+```sh
+make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke
+make -C npc clean && make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
+  test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest \
+  test-clint test-icache test-fencei test-access-fault \
+  REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+```
+
+Both passed.
+
+PPA command:
+
+```sh
+make -C npc sta-sweep \
+  STA_O=../build/p10-s7-compare-share/ppa \
+  STA_LOG_DIR=../build/p10-s7-compare-share/logs \
+  STA_FREQS="560 570 580 600 620 640"
+```
+
+Measured result against P10-S6 IFU point:
+
+| Metric | P10-S6 IFU | P10-S7 comparator sharing | Delta |
+| --- | ---: | ---: | ---: |
+| Area | `22775.200000` | `22547.280000` | `-227.920000` (`-1.0%`) |
+| Sequential area | `9086.000000` | `9086.000000` | `0` |
+| `DFFQX1H7L` | `1475` | `1475` | `0` |
+| Clean checked target | `580 MHz` | `570 MHz` | `-10 MHz` |
+| 580 MHz worst slack | `+0.052 ns` | `-0.010 ns` | `-0.062 ns` |
+| 600 MHz worst slack | `-0.006 ns` | `-0.068 ns` | `-0.062 ns` |
+| 620 MHz worst slack | `-0.060 ns` | `-0.122 ns` | `-0.062 ns` |
+| 640 MHz worst slack | `-0.110 ns` | `-0.172 ns` | `-0.062 ns` |
+
+Interpretation: comparator sharing is an area win but not a timing win. The likely structural reason is that sharing forces branch comparison behind the ALU operand-select mux and gives the comparator a broader fanout context; the old duplicated branch comparator was wasteful but sat directly on `x_rs1_data/x_rs2_data`.
+
 ### Immediate next action
 
-Implement the IFU refill shadow-register removal, validate functionally, and re-run STA/PPA to measure the area impact against the reverted 3-stage baseline.
-- `notes/p10-design-review.md` contains the full module-by-module hardware-mapping analysis.
+The user accepted the comparator-sharing trade-off. Keep the P10-S7 comparator-sharing point as the current RTL:
+
+- Area is lower by about `1.0%` versus P10-S6 IFU.
+- Clean checked frequency is lower (`570 MHz` instead of `580 MHz`), but the area win is accepted.
+- The next optimization should avoid adding more delay to the branch/next-PC critical path; look for area wins outside that path, or specialize X/C packet registers without adding X-stage logic.
+
+`notes/p10-design-review.md` contains the full module-by-module hardware-mapping analysis and both attempt results.

@@ -451,6 +451,71 @@ Reorder the plan to attack module-level structural inefficiencies before any arc
 
 5. **CPI optimizations last** (prefetch buffer, fairer arbitration, branch prediction) once PPA targets are met.
 
-## 9. Immediate next action
+## 9. IFU refill shadow-register removal result
 
-Implement Step 1: remove the IFU refill-word shadow registers in `npc/rtl/core/Ifu.v`. Validate functionally and re-run STA/PPA to measure the area impact against the reverted 3-stage baseline.
+Step 1 was implemented in `npc/rtl/core/Ifu.v`: refill beats are now written directly into the selected cache data registers, and the old `refill_word0_q`..`refill_word3_q` shadow registers are gone.
+
+Measured against the reverted 3-stage baseline in the same STA flow:
+
+- Area improved from `24119.2` to `22775.2` (`-1344.0`, about `-5.6%`).
+- Sequential cells dropped from `1603` to `1475` `DFFQX1H7L`, matching the intended 128-flop removal.
+- 620 MHz setup slack improved from about `-0.210 ns` to about `-0.060 ns`, but 620 MHz still did not close.
+
+**Decision**: keep the IFU direct-refill change. It is a real structural area win with no CPI or functional-cost mechanism.
+
+## 10. Comparator-sharing attempt result
+
+Step 2 was implemented as a deliberate module-level attempt in `npc/rtl/core/Exu.v` and `npc/rtl/core/Core.v`:
+
+- `Exu.v` now exports reusable comparison facts: `equal`, `less_signed`, and `less_unsigned`.
+- `Exu.v` uses `less_signed`/`less_unsigned` for `SLT`/`SLTU`.
+- `Core.v` uses those same facts for `BEQ`/`BNE`/`BLT`/`BGE`/`BLTU`/`BGEU` instead of independently describing another branch comparator.
+- Because branch instructions are decoded as `src2_imm` in the ALU path, `Core.v` also selects `x_rs2_data` as `alu_src2` whenever `branch_op != NPC_BR_NONE`; otherwise branch comparisons would compare `rs1` against the B-immediate, which was caught by the first smoke regression.
+
+Why this was tried:
+
+- The old RTL was functionally clear but structurally duplicated comparison hardware: ALU `SLT`/`SLTU` and branch compare described similar operand comparisons separately.
+- Sharing comparison facts is CPI-neutral and does not add pipeline stages, stalls, or fetch-policy changes.
+- The expected benefit was less comparator logic and possibly shorter branch-control logic.
+
+Functional validation after fixing the branch operand issue:
+
+```sh
+make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke
+make -C npc clean && make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
+  test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest \
+  test-clint test-icache test-fencei test-access-fault \
+  REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+```
+
+Both passed. The directed/DiffTest regression includes branch/jalr, ALU signed/unsigned comparisons, memory, CSR/trap, CLINT, icache, fence.i, and access-fault cases.
+
+PPA command:
+
+```sh
+make -C npc sta-sweep \
+  STA_O=../build/p10-s7-compare-share/ppa \
+  STA_LOG_DIR=../build/p10-s7-compare-share/logs \
+  STA_FREQS="560 570 580 600 620 640"
+```
+
+Measured result against the P10-S6 IFU point:
+
+| Metric | P10-S6 IFU | P10-S7 comparator sharing | Delta |
+| --- | ---: | ---: | ---: |
+| Chip area | `22775.200000` | `22547.280000` | `-227.920000` (`-1.0%`) |
+| Sequential area | `9086.000000` | `9086.000000` | `0` |
+| `DFFQX1H7L` | `1475` | `1475` | `0` |
+| Clean checked target | `580 MHz` | `570 MHz` | `-10 MHz` |
+| 580 MHz worst slack | `+0.052 ns` | `-0.010 ns` | `-0.062 ns` |
+| 600 MHz worst slack | `-0.006 ns` | `-0.068 ns` | `-0.062 ns` |
+| 620 MHz worst slack | `-0.060 ns` | `-0.122 ns` | `-0.062 ns` |
+| 640 MHz worst slack | `-0.110 ns` | `-0.172 ns` | `-0.062 ns` |
+
+Interpretation:
+
+- The attempt is a real area win: about `1.0%` area reduction with no flop-count change.
+- It is **not a timing success**: the clean checked frequency drops from `580 MHz` to `570 MHz`, and the worst slack worsens by about `62 ps` across the checked high-frequency points.
+- The likely reason is structural: to reuse the ALU comparator for branches, branch instructions now force the main ALU second operand mux to choose `x_rs2_data`; this puts branch compare behind the ALU operand-select path and gives the shared comparator a broader fanout/use context. The old duplicated branch comparator was wasteful in area, but it let the branch compare sit directly on `x_rs1_data/x_rs2_data` without involving the ALU `src2` mux.
+
+**Decision after user revision**: keep comparator sharing. The user accepted the area/timing trade-off: about `1.0%` lower area at the cost of reducing the clean checked target from `580 MHz` to `570 MHz`. The next optimization should avoid adding more delay to the branch/next-PC critical path; look for area wins outside this path or specialize X/C packet registers without adding X-stage logic.

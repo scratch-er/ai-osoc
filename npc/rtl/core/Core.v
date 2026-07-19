@@ -156,6 +156,9 @@ module Core #(
   wire [31:0] alu_src1;
   wire [31:0] alu_src2;
   wire [31:0] alu_result;
+  wire        alu_equal;
+  wire        alu_less_signed;
+  wire        alu_less_unsigned;
 
   wire        ifu_bus_valid;
   wire [31:0] ifu_bus_addr;
@@ -221,12 +224,12 @@ module Core #(
   wire        x_is_mret = sys_cmd == `NPC_SYS_MRET;
   wire        x_is_fence_i = sys_cmd == `NPC_SYS_FENCE_I;
   wire [31:0] x_pc_plus_4 = x_pc + 32'd4;
-  wire        branch_taken = (branch_op == `NPC_BR_BEQ)  ? (x_rs1_data == x_rs2_data) :
-                             (branch_op == `NPC_BR_BNE)  ? (x_rs1_data != x_rs2_data) :
-                             (branch_op == `NPC_BR_BLT)  ? ($signed(x_rs1_data) < $signed(x_rs2_data)) :
-                             (branch_op == `NPC_BR_BGE)  ? ($signed(x_rs1_data) >= $signed(x_rs2_data)) :
-                             (branch_op == `NPC_BR_BLTU) ? (x_rs1_data < x_rs2_data) :
-                             (branch_op == `NPC_BR_BGEU) ? (x_rs1_data >= x_rs2_data) : 1'b0;
+  wire        branch_taken = (branch_op == `NPC_BR_BEQ)  ? alu_equal :
+                             (branch_op == `NPC_BR_BNE)  ? !alu_equal :
+                             (branch_op == `NPC_BR_BLT)  ? alu_less_signed :
+                             (branch_op == `NPC_BR_BGE)  ? !alu_less_signed :
+                             (branch_op == `NPC_BR_BLTU) ? alu_less_unsigned :
+                             (branch_op == `NPC_BR_BGEU) ? !alu_less_unsigned : 1'b0;
   wire [31:0] jalr_target = (x_rs1_data + imm_i) & ~32'd1;
   wire [31:0] jal_target = x_pc + imm_j;
   wire [31:0] branch_target = x_pc + imm_b;
@@ -301,7 +304,7 @@ module Core #(
                     (imm_sel == `NPC_IMM_U) ? imm_u :
                     (imm_sel == `NPC_IMM_J) ? imm_j : imm_i;
   assign alu_src1 = src1_pc ? x_pc : x_rs1_data;
-  assign alu_src2 = src2_imm ? imm_data : x_rs2_data;
+  assign alu_src2 = (branch_op != `NPC_BR_NONE) ? x_rs2_data : (src2_imm ? imm_data : x_rs2_data);
   assign x_rs1_data = (c_can_forward && c_rs1_match) ? c_forward_data : rf_rs1_data;
   assign x_rs2_data = (c_can_forward && c_rs2_match) ? c_forward_data : rf_rs2_data;
 
@@ -431,7 +434,10 @@ module Core #(
     .alu_op(alu_op),
     .src1(alu_src1),
     .src2(alu_src2),
-    .result(alu_result)
+    .result(alu_result),
+    .equal(alu_equal),
+    .less_signed(alu_less_signed),
+    .less_unsigned(alu_less_unsigned)
   );
 
   Lsu u_lsu (
