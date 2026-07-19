@@ -218,15 +218,62 @@ make -C npc soc-smoke test-soc-difftest test-soc-mem \
   REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
 ```
 
+## Static prediction attempt (rejected by measurement)
+
+The first candidate after this note was deliberately changed from BTB to **static prediction only** after user review, because a BTB costs too much area for this design point.
+
+Implementation attempted in `npc/rtl/core/Core.v`:
+
+- Predict backward conditional branches and `jal` in D using `fd_pc + imm_b/imm_j`.
+- Carry `dx_pred_taken`/`dx_pred_pc` to X.
+- Remove the direct X-stage `x_redirect_pc -> f_pc` update and instead register mispredict/dynamic redirects into X/W for W-stage redirect.
+- Keep `jalr` and `mret` as dynamically resolved late redirects.
+
+Why this was tried:
+
+- It directly targets the measured P10-S9 bottleneck (`D/X -> shared adder -> f_pc`) without BTB storage.
+- It uses no predictor table and only adds a D-stage target adder plus a few flops.
+
+Validation results before reverting:
+
+- `make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke`: passed with `NPC_SPEC_RESULT status=good reason=uart_eot cycles=63 limit=400`.
+- Directed debug/DiffTest regression initially exposed only a debug `commit_next_pc` mismatch for `jal`; after fixing debug commit reporting, all directed tests passed.
+- Full 35 `cpu-tests` with NEMU DiffTest passed. Representative cycles:
+  - `sum`: `1542` cycles (P10-S9 was `1640`, better CPI)
+  - `string`: `4341` cycles (P10-S9 was `4541`, better CPI)
+  - `matrix-mul`: `568184` cycles (P10-S9 was `570451`, slightly better CPI)
+  - `crc32`: `68186` cycles (P10-S9 was `68459`, slightly better CPI)
+  - `quick-sort`: `12515` cycles (P10-S9 was `12547`, slightly better CPI)
+- RT-Thread scripted `halt` passed with `NPC_RESULT status=good reason=good_trap cycles=1988529 insts=511842`; this is worse than P10-S9 (`1955726`) because static prediction increased icache misses/AMAT on that workload.
+
+PPA results were bad:
+
+- Static-prediction netlist area at `build/p10-static-predict/ppa/NPC-770MHz/synth_stat.txt`: `23782.640000`, DFFs `1694`, ICGs `19`.
+- This is `+1660.400000` area and `+65` DFFs versus P10-S9 (`22122.240000`, `1629` DFFs).
+- STA at `770 MHz` failed badly: worst endpoint `u_core.f_pc_28__reg_p:D`, path delay `1.655 ns`, slack `-0.403 ns`, reported Fmax about `587.971 MHz`.
+- The new bottleneck became D-stage static target generation/control into `f_pc` and `dx_pred_pc`, so the attempt merely moved the long PC-target path earlier and made it worse.
+- The `sta-sweep` wrapper also hit an iEDA report-copy permission abort after generating reports; the reports themselves were usable.
+
+Decision:
+
+- Reverted `npc/rtl/core/Core.v` back to the accepted P10-S9 baseline (`809d40d` content), because the attempt was functionally correct but failed the PPA goal.
+- Clean baseline spec smoke after revert passed: `NPC_SPEC_RESULT status=good reason=uart_eot cycles=63 limit=400`.
+
+Conclusion:
+
+- Static prediction without a target buffer is not a good timing optimization for this 4-stage RTL. It needs a D-stage target adder feeding `f_pc`, which synthesizes slower than the original X-stage redirect path.
+- The result confirms that the problem is not just branch decision timing; target generation plus the `f_pc` mux is the real issue.
+- Do not retry this exact static-prediction structure.
+
 ## Decision criteria for next session
 
-Keep the 4-stage point if:
+Keep the P10-S9 4-stage point if:
 - Clean STA target ≥ 770 MHz is acceptable, and
 - RT-Thread wall-clock is acceptable (currently −4.4% vs P10-S8).
 
-Attempt the BTB if:
-- The user wants higher frequency, and
-- Acceptable area increase for the BTB flops (~512+ flops).
+Avoid BTB unless the user explicitly accepts the area cost.
+
+Avoid the rejected static-prediction design above; it improved some `cpu-tests` cycle counts but regressed area and timing severely.
 
 Revert to P10-S8 only if:
 - The CPI regression for small programs is unacceptable, and
