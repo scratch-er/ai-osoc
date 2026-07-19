@@ -84,7 +84,9 @@ module Core #(
 
   reg        xc_valid;
   reg [31:0] xc_pc;
+`ifdef NPC_DEBUG
   reg [31:0] xc_inst;
+`endif
   reg        xc_inst_error;
   reg [4:0]  xc_rd;
   reg        xc_writes_rd;
@@ -254,7 +256,12 @@ module Core #(
   wire        c_complete_inst = c_can_complete_no_mem_fault && !c_mem_access_fault;
   wire        c_mem_ready = !c_mem_access || lsu_raw_ready;
   wire        c_retire_ready = !reset && !halted && xc_valid && c_mem_ready;
-  wire        c_wb_wen = c_complete_inst && c_mem_ready && xc_writes_rd && !xc_is_mret;
+  // Qualify the writeback enable with xc_rd != 0 so that instructions with
+  // rd=x0 never forward and never assert the register-file write enable.  This
+  // lets the forwarding match drop its explicit rs1/rs2 != 0 term, slightly
+  // shortening the dependency-check path.
+  wire        c_wb_wen = c_complete_inst && c_mem_ready && xc_writes_rd &&
+                         xc_rd != 5'd0 && !xc_is_mret;
   wire        c_lsu_wen = c_can_complete_no_mem_fault && xc_mem_wen;
   wire [31:0] c_exception_cause = xc_inst_error ? {27'd0, `NPC_EXC_INST_ACCESS_FAULT} :
                                   !xc_decode_legal ? {27'd0, `NPC_EXC_ILLEGAL_INST} :
@@ -272,8 +279,8 @@ module Core #(
                           ((xc_wb_sel == `NPC_WB_CSR) ? xc_csr_rdata : xc_alu_result));
   wire [31:0] c_forward_data = c_wb_mux;
   wire        c_can_forward = xc_valid && c_wb_wen;
-  wire        c_rs1_match = reads_rs1 && rs1 != 5'd0 && xc_rd == rs1;
-  wire        c_rs2_match = reads_rs2 && rs2 != 5'd0 && xc_rd == rs2;
+  wire        c_rs1_match = reads_rs1 && xc_rd == rs1;
+  wire        c_rs2_match = reads_rs2 && xc_rd == rs2;
   wire        c_load_waiting = xc_valid && xc_mem_ren && !c_mem_ready;
   wire        load_use_stall = c_load_waiting && xc_writes_rd && (c_rs1_match || c_rs2_match);
   wire        c_stage_stall = xc_valid && !c_mem_ready;
@@ -311,7 +318,7 @@ module Core #(
   assign commit_pc = xc_pc;
   assign commit_inst = xc_inst;
   assign commit_next_pc = c_next_pc;
-  assign commit_wen = c_wb_wen && xc_rd != 5'd0;
+  assign commit_wen = c_wb_wen;
   assign commit_rd = xc_rd;
   assign commit_wdata = wb_data;
   assign commit_exception = c_bad_without_vector || xc_inst_error || c_mem_access_fault;
@@ -594,7 +601,9 @@ module Core #(
       end else if (x_can_advance) begin
         xc_valid <= 1'b1;
         xc_pc <= x_pc;
+`ifdef NPC_DEBUG
         xc_inst <= x_inst;
+`endif
         xc_inst_error <= x_inst_error;
         xc_rd <= rd;
         xc_writes_rd <= writes_rd;
@@ -635,7 +644,7 @@ module Core #(
   wire unused = |{opcode, funct3, funct7, mcause, mstatus, trap_status};
 `else
   wire unused = |{opcode, funct3, funct7, mcause, mstatus, trap_status,
-                 xc_inst, lsu_write_addr, lsu_write_data, lsu_write_mask};
+                 lsu_write_addr, lsu_write_data, lsu_write_mask};
 `endif
 
 endmodule

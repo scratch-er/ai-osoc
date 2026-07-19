@@ -1175,3 +1175,128 @@ Next steps:
 
 1. Commit the validated P10 pipeline/timing-area checkpoint now, per user request.
 2. Continue P10 optimization after the commit. Start from measured bottlenecks: next-PC/X-C packet timing, CPI lost to the registered fetch path, branch/redirect penalty, load-use behavior, and physical-only state/fanout.
+
+## Phase 10 Session 5: STA-driven area and timing optimization
+
+Date: 2026-07-19
+Platform: Linux
+
+### Starting point
+
+P10-S3 area-counter-gate pipeline point (committed/validated in P10-S4):
+- Area `24273.200000`, DFFs `1603`, ICGs `17`
+- Fmax `562.903 MHz` under `icsprout55` with `DELAY 4`
+- Clean checked target `560 MHz` (`+0.008 ns`)
+- Critical path: `F/X inst register -> regfile read -> branch compare -> xc_normal_next_pc register`
+- Workload CPI mixed vs P8 single-cycle; RT-Thread still slightly better
+
+### Comparison baseline
+
+| Design | Area | DFFs | ICGs | Fmax | Clean target | Notes |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| P8-S3 single-cycle | 22685.32 | 1299 | 15 | 614.531 MHz | 610 MHz | Pre-pipeline |
+| P10-S2 pipeline | 25971.12 | 1625 | 15 | 449.147 MHz | - | Unregistered IFU->X/C path |
+| P10-S3 no-direct | 25376.40 | 1633 | 15 | 623.649 MHz | 600 MHz | Registered IFU response |
+| P10-S3 area-counter-gate | 24273.20 | 1603 | 17 | 562.903 MHz | 560 MHz | Debug counters gated |
+| **P10-S5 optimized** | **24124.52** | **1603** | **17** | **579.331 MHz** | **570 MHz** | This session |
+
+### STA analysis
+
+Fresh sweep of the P10-S4 point confirmed the critical path is the X-stage next-PC computation:
+- Launch: `u_core.ifu_inst_*__MUX2X0P5H7L_B_Y_DFFQX1H7L_D:CK` (F/X instruction register)
+- Capture: `u_core.xc_normal_next_pc_*__reg_p:D` (X/C next-PC register)
+- Path delay `1.730 ns` at `560 MHz`
+- Largest segments: regfile read address buffering + read mux (~0.77 ns), branch comparison (~0.59 ns), next-PC final mux (~0.24 ns)
+
+Second-worst paths have large positive slack, so the next-PC/ALU path is the only real bottleneck.
+
+Rejected experiment: removing the explicit x0 mux in `RegFile.v` (`assign rdata = regs[raddr]`) worsened both area and timing (area `24321.64`, Fmax `543.0 MHz`), so it was reverted.
+
+### Implemented optimizations
+
+1. **Remove `xc_inst` register in `NPC_DEBUG=0`**
+   - Wrapped declaration and assignment in `` `ifdef NPC_DEBUG ``
+   - Removed `xc_inst` from the spec-mode unused reduction
+   - Result: area `24273.20 -> 24120.88`, Fmax `562.9 -> 576.7 MHz`
+   - Functional validation passed; the register had non-zero physical fanout that synthesis could not fully eliminate
+
+2. **Qualify `c_wb_wen` with `xc_rd != 0` and simplify forwarding match**
+   - Since `xc_rd` is never zero when writeback is real (x0 writes are suppressed at the register file), including `xc_rd != 0` in `c_wb_wen` lets the forwarding dependency check drop its explicit `rs1/rs2 != 0` term
+   - Result: area essentially unchanged (`24120.88 -> 24124.52`), Fmax `576.7 -> 579.3 MHz`
+   - Critical path moved from `xc_normal_next_pc` to `xc_alu_result_31`
+
+### Combined PPA result
+
+| Metric | P10-S4 | P10-S5 | Delta |
+| --- | ---: | ---: | ---: |
+| Area | 24273.20 | 24124.52 | -148.68 (-0.61%) |
+| DFFs | 1603 | 1603 | 0 |
+| ICGs | 17 | 17 | 0 |
+| Fmax | 562.903 MHz | 579.331 MHz | +16.428 MHz (+2.92%) |
+| Clean target | 560 MHz | 570 MHz | +10 MHz |
+| Slack @ 570 MHz | -0.023 ns | +0.028 ns | +0.051 ns |
+
+Synthesis command used:
+
+```sh
+make -C npc sta STA_O=../build/p10-optimize/final-570 CLK_FREQ_MHZ=570
+```
+
+### Validation completed
+
+1. Debug-mode directed/DiffTest regression passed:
+
+```sh
+make -C npc clean && make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
+  test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest \
+  test-clint test-icache test-fencei test-access-fault \
+  REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+```
+
+2. Spec-mode smoke passed (`NPC_DEBUG=0`):
+
+```sh
+make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke
+```
+
+Output included `NPC_SPEC_RESULT status=good reason=uart_eot cycles=57 limit=400`.
+
+3. Full 35-test `cpu-tests` sweep passed with NEMU event DiffTest.
+
+4. RT-Thread scripted shell `halt` passed:
+
+```sh
+make -C rt-thread-am/bsp/abstract-machine ARCH=riscv32e-npc \
+  AM_HOME=/host/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-linux-gnu- NPC_MAX_CYCLES=12000000 \
+  NPC_DIFFTEST_REF=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+Result: `NEMU_RESULT status=good ... insts=511842`; `NPC_RESULT status=good reason=good_trap cycles=1807788 insts=511842`.
+
+5. AM `hello` passed: printed `Hello, AbstractMachine!`, `NPC_RESULT status=good reason=good_trap cycles=2153 insts=465`.
+
+6. SoC regression passed:
+
+```sh
+make -C npc soc-smoke test-soc-difftest test-soc-mem \
+  REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+```
+
+### Files modified
+
+- `npc/rtl/core/Core.v`
+
+No changes to `npc/rtl/core/RegFile.v` (x0-mux experiment reverted).
+
+### Next steps
+
+1. The remaining bottleneck is the X-stage path from F/X instruction register through regfile read and ALU/branch to the X/C registers. The biggest segment is the regfile read (~0.77 ns) followed by the ALU/branch computation (~0.59-1.0 ns).
+2. The highest-impact next optimization is to move the register-file read into the F/X stage:
+   - Read `rs1`/`rs2` from the register file using `fx_inst` in the F/X stage
+   - Register the read values as `fx_rs1_data`/`fx_rs2_data`
+   - Forward from the C stage to the F/X stage instead of the X stage
+   - Adjust load-use stall detection to cover the new read timing
+   - This removes the regfile-read delay from both the ALU and next-PC critical paths and should push Fmax well above 600 MHz, at the cost of 64 extra F/X register bits and more complex hazard logic.
+3. Continue measuring CPI after each major pipeline change; if CPI regressions dominate, revisit the fetch/direct path or add a small instruction queue.
+4. Re-evaluate area after the regfile-read move; look for further reductions in unused physical-only state and X/C register width.
