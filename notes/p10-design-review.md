@@ -594,3 +594,102 @@ Interpretation:
 - CPI did not regress in the directed tests. RT-Thread cycle count improved from the previous noted `1816964`/`511842` P8/P10 baseline to `1807800`/`511842`, but treat that as workload noise or side effect of control timing structure unless reproduced across multiple workloads.
 
 **Decision for user revision**: keep the redirect split unless the user objects. It is exactly the kind of structural RTL optimization requested: it comes from understanding what the old RTL became in hardware, improves timing substantially, has near-neutral/slightly better area, and does not change the architecture or CPI policy.
+
+
+## 12. ALU result gating attempt result
+
+P10-S9 tried a small CPI-neutral structural cleanup in `npc/rtl/core/Core.v` after the redirect split made `xc_alu_result_*__reg_p:D` the top setup endpoint.
+
+What was tried:
+
+- Added an X-stage `x_result_data` wire.
+- Changed the X/C packet capture from unconditional `xc_alu_result <= alu_result` to `xc_alu_result <= (wb_sel == NPC_WB_ALU) ? alu_result : 32'd0`.
+- The intent was to avoid carrying a meaningful ALU result for loads/stores, branches, jumps, and CSR instructions, because those classes do not use `xc_alu_result` for writeback.
+
+Why this was tried:
+
+- The P10-S8 worst path was the ALU result endpoint (`xc_alu_result_20__reg_p:D`, `1.419 ns`, clean `680 MHz`, `690 MHz` failing by about `15 ps`).
+- The RTL before the attempt looked functionally simple but structurally broad: every instruction captured the full ALU result even when C stage would later select memory, PC+4, or CSR data.
+- This was deliberately chosen as a small, CPI-neutral attempt instead of another pipeline change.
+
+Functional validation before PPA:
+
+```sh
+make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke
+make -C npc clean && make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
+  test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest \
+  test-clint test-icache test-fencei test-access-fault \
+  REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+make -C rt-thread-am/bsp/abstract-machine ARCH=riscv32e-npc \
+  AM_HOME=/host/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-linux-gnu- NPC_MAX_CYCLES=12000000 \
+  NPC_DIFFTEST_REF=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+Results:
+
+- Spec smoke passed: `NPC_SPEC_RESULT status=good reason=uart_eot cycles=57 limit=400`.
+- Directed/debug regression passed, including branch/jalr, ALU, memory, CSR/trap, CLINT, icache, fence.i, access-fault, and DiffTest cases.
+- RT-Thread passed through scripted shell `halt` with DiffTest: `NEMU_RESULT status=good`, `NPC_RESULT status=good reason=good_trap cycles=1807800 insts=511842`.
+
+PPA command:
+
+```sh
+make -C npc sta-sweep \
+  STA_O=../build/p10-s9-alu-result-gate/ppa \
+  STA_LOG_DIR=../build/p10-s9-alu-result-gate/logs \
+  STA_FREQS="680 690 700"
+```
+
+Measured result against P10-S8 redirect split:
+
+| Metric | P10-S8 redirect split | P10-S9 ALU result gating | Delta |
+| --- | ---: | ---: | ---: |
+| Chip area | `22528.520000` | about `22300` | about `-1.0%` |
+| `DFFQX1H7L` | `1476` | `1476` | `0` |
+| Clean checked target | `680 MHz` | below `680 MHz` | regression |
+| 680 MHz worst slack | `+0.006 ns` | `-0.073 ns` | `-0.079 ns` |
+| 690 MHz worst slack | `-0.015 ns` | `-0.094 ns` | `-0.079 ns` |
+| Reported Fmax | `682.840 MHz` | `648.190 MHz` top endpoint | about `-34.650 MHz` |
+
+Interpretation:
+
+- The attempt is an area win, but it is a clear timing regression and fails the approved keep criteria.
+- The likely structural reason is that the added `wb_sel == NPC_WB_ALU` select did not simply remove unused ALU values. It added decode/writeback-select logic to the path feeding `xc_alu_result` and changed synthesis around the adjacent redirect/exception cones. The new top endpoint became `xc_redirect_reg_p:D` with `1.497 ns`, so the change also disturbed the branch/redirect path that P10-S8 had just shortened.
+- This is a good negative result: not every apparently narrower RTL expression creates a shorter circuit. Here, adding a late semantic gate to a critical packet register traded area for extra control depth and worse timing.
+
+Decision:
+
+- Reverted the RTL to the P10-S8 structure: `xc_alu_result <= alu_result`.
+- After revert, `make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke` passed again with `NPC_SPEC_RESULT status=good reason=uart_eot cycles=57 limit=400`.
+- Do not retry this exact gating pattern. Future area work should avoid feeding additional decode/control conditions into `xc_alu_result`, `xc_redirect`, or `xc_pc_exception`. If reducing X/C packet area, specialize registers in a way that does not add X-stage selection on the current critical endpoints.
+
+
+### Follow-up recommendation after P10-S9
+
+The ALU-result-gating attempt is not worth keeping. Although it saved roughly `1%` area, it changed the practical timing point from clean `680 MHz` to failing `680 MHz`. In this phase, the design is timing-limited and only about `15 ps` away from `690 MHz`, so spending about `79 ps` of slack for a small area win is the wrong trade.
+
+Avoid these patterns next:
+
+- Do not gate `xc_alu_result` with late decode/writeback-control terms.
+- Do not add new X-stage selects feeding `xc_redirect`, `xc_pc_exception`, or `xc_alu_result` unless the structural timing reason is stronger than the added control depth.
+- Do not repeat the full 4-stage regfile-read pipeline unless CPI is addressed at the same time.
+
+Better alternatives to consider:
+
+1. **Re-evaluate comparator sharing**.
+   - P10-S7 comparator sharing was intentionally kept for area, but it cost timing before the redirect split.
+   - Current branch instructions still force the ALU source-2 mux to select `x_rs2_data` so that `Exu` comparison facts can be reused for branches.
+   - A deliberate timing experiment should restore a direct branch comparator from `x_rs1_data/x_rs2_data` while keeping ALU `SLT/SLTU` inside `Exu`, then measure whether P10-S8 can close `690 MHz` or better.
+   - This is the most plausible next timing experiment because it targets a known area/timing trade-off, not a random endpoint.
+
+2. **Look for area wins outside the X critical path**.
+   - `AxiMaster.v`: review whether `read_beat_q`/`len_q` need 8 bits when the current core uses single-beat LSU accesses and 4-beat IFU refills.
+   - `Csr.v`: only simplify if the CSR read/write logic can be reduced without adding X-stage control to critical endpoints.
+   - X/C packet specialization is still possible, but only if the specialization removes registers or muxes without adding late X-stage selects.
+
+3. **Reduce regfile/forwarding load without adding a new pipeline stage**.
+   - The 4-stage experiment proved that moving regfile read out of X improves frequency but can lose PPA through CPI.
+   - A lighter alternative is to review forwarding and dependency logic fanout around `rf_rs*_data`/`x_rs*_data`, preserving the current 3-stage schedule.
+
+Recommended next attempt: restore separate branch comparison as a measured experiment, compare against P10-S8 on timing and area, and keep it only if the frequency gain justifies the area returned.
