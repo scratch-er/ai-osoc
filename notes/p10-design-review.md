@@ -519,3 +519,78 @@ Interpretation:
 - The likely reason is structural: to reuse the ALU comparator for branches, branch instructions now force the main ALU second operand mux to choose `x_rs2_data`; this puts branch compare behind the ALU operand-select path and gives the shared comparator a broader fanout/use context. The old duplicated branch comparator was wasteful in area, but it let the branch compare sit directly on `x_rs1_data/x_rs2_data` without involving the ALU `src2` mux.
 
 **Decision after user revision**: keep comparator sharing. The user accepted the area/timing trade-off: about `1.0%` lower area at the cost of reducing the clean checked target from `580 MHz` to `570 MHz`. The next optimization should avoid adding more delay to the branch/next-PC critical path; look for area wins outside this path or specialize X/C packet registers without adding X-stage logic.
+
+## 11. Redirect decision/target split result
+
+P10-S8 implemented a focused timing optimization in `npc/rtl/core/Core.v`: split the old `xc_normal_next_pc` register into explicit redirect state:
+
+- `xc_redirect`: one bit saying whether the committed instruction redirects control flow (`mret`, `jalr`, `jal`, or taken branch).
+- `xc_redirect_pc`: the target address for redirect-capable instructions.
+- C stage now computes `c_normal_next_pc = xc_redirect ? xc_redirect_pc : (xc_pc + 4)`.
+- `redirect` now uses the explicit `xc_redirect` bit instead of the old full-width `c_next_pc != c_pc_plus_4` comparison.
+
+Why this was tried:
+
+- The P10-S7 worst path ended at `xc_normal_next_pc_*__reg_p:D`.
+- The old RTL described a 32-bit mux selected by `branch_taken`, so the branch comparator sat on a 32-bit next-PC data endpoint.
+- The branch target itself does not depend on the comparison; only the decision to use it does. Splitting target and decision moves the branch decision to a one-bit endpoint and removes the unconditional target-vs-`pc+4` X-stage data mux.
+- This keeps the 3-stage `F/X/C` architecture and CPI unchanged; it is a structural RTL change, not another pipeline experiment.
+
+Functional validation:
+
+```sh
+make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke
+make -C npc clean && make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
+  test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest \
+  test-clint test-icache test-fencei test-access-fault \
+  REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+make -C rt-thread-am/bsp/abstract-machine ARCH=riscv32e-npc \
+  AM_HOME=/host/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-linux-gnu- NPC_MAX_CYCLES=12000000 \
+  NPC_DIFFTEST_REF=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+Results:
+
+- Spec smoke passed: `NPC_SPEC_RESULT status=good reason=uart_eot cycles=57 limit=400`.
+- Directed/debug regression passed, including branch/jalr, ALU, memory sizes/misalignment, illegal RV32E register checks, CSR/trap, CLINT, icache, fence.i, and access-fault DiffTest cases.
+- RT-Thread passed through scripted shell `halt` with DiffTest: `NEMU_RESULT status=good`, `NPC_RESULT status=good reason=good_trap cycles=1807800 insts=511842`, `NPC_ICACHE accesses=511842 hits=428931 misses=82911 ... hit_rate_x1000=838 amat_x1000=2019`.
+
+PPA command:
+
+```sh
+make -C npc sta-sweep \
+  STA_O=../build/p10-s8-redirect-split/ppa \
+  STA_LOG_DIR=../build/p10-s8-redirect-split/logs \
+  STA_FREQS="560 570 580 600 620 640"
+make -C npc sta-sweep \
+  STA_O=../build/p10-s8-redirect-split/ppa \
+  STA_LOG_DIR=../build/p10-s8-redirect-split/logs \
+  STA_FREQS="680 690 700"
+```
+
+Measured result against P10-S7 comparator sharing:
+
+| Metric | P10-S7 comparator sharing | P10-S8 redirect split | Delta |
+| --- | ---: | ---: | ---: |
+| Chip area | `22547.280000` | `22528.520000` | `-18.760000` (`-0.08%`) |
+| Sequential area | `9086.000000` | `9092.160000` | `+6.160000` |
+| `DFFQX1H7L` | `1475` | `1476` | `+1` |
+| `ICGX0P5H7L` | `17` | `17` | `0` |
+| Clean checked target | `570 MHz` | `680 MHz` | `+110 MHz` |
+| 580 MHz worst slack | `-0.010 ns` | `+0.260 ns` | `+0.270 ns` |
+| 600 MHz worst slack | `-0.068 ns` | `+0.202 ns` | `+0.270 ns` |
+| 620 MHz worst slack | `-0.122 ns` | `+0.148 ns` | `+0.270 ns` |
+| 640 MHz worst slack | `-0.172 ns` | `+0.098 ns` | `+0.270 ns` |
+| 680 MHz worst slack | not checked | `+0.006 ns` | — |
+| 690 MHz worst slack | not checked | `-0.015 ns` | — |
+| Reported Fmax | `576.746 MHz` at 580 MHz report | `682.840 MHz` | `+106.094 MHz` |
+
+Interpretation:
+
+- This attempt is a clear timing success. The old `xc_normal_next_pc` endpoint disappeared from the top critical list; the new worst endpoint is `xc_alu_result_20__reg_p:D` at `1.419 ns`, with `xc_redirect_reg_p:D` close behind at `1.408 ns`.
+- The clean checked target improved from `570 MHz` to `680 MHz`; `690 MHz` fails by about `15 ps`, so the practical limit is around `682.8 MHz` in this STA setup.
+- Area also improved slightly despite adding one extra flop. The likely reason is that removing the 32-bit normal-next-PC mux and full-width redirect compare let synthesis simplify more logic than the one additional `xc_redirect` flop costs.
+- CPI did not regress in the directed tests. RT-Thread cycle count improved from the previous noted `1816964`/`511842` P8/P10 baseline to `1807800`/`511842`, but treat that as workload noise or side effect of control timing structure unless reproduced across multiple workloads.
+
+**Decision for user revision**: keep the redirect split unless the user objects. It is exactly the kind of structural RTL optimization requested: it comes from understanding what the old RTL became in hardware, improves timing substantially, has near-neutral/slightly better area, and does not change the architecture or CPI policy.

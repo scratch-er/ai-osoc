@@ -103,7 +103,8 @@ module Core #(
   reg [31:0] xc_rs2_data;
   reg [31:0] xc_alu_result;
   reg [31:0] xc_lsu_addr;
-  reg [31:0] xc_normal_next_pc;
+  reg        xc_redirect;
+  reg [31:0] xc_redirect_pc;
   reg        xc_is_mret;
   reg        xc_is_fence_i;
   reg        xc_decode_legal;
@@ -223,7 +224,6 @@ module Core #(
   wire        x_is_ebreak = sys_cmd == `NPC_SYS_EBREAK;
   wire        x_is_mret = sys_cmd == `NPC_SYS_MRET;
   wire        x_is_fence_i = sys_cmd == `NPC_SYS_FENCE_I;
-  wire [31:0] x_pc_plus_4 = x_pc + 32'd4;
   wire        branch_taken = (branch_op == `NPC_BR_BEQ)  ? alu_equal :
                              (branch_op == `NPC_BR_BNE)  ? !alu_equal :
                              (branch_op == `NPC_BR_BLT)  ? alu_less_signed :
@@ -233,10 +233,10 @@ module Core #(
   wire [31:0] jalr_target = (x_rs1_data + imm_i) & ~32'd1;
   wire [31:0] jal_target = x_pc + imm_j;
   wire [31:0] branch_target = x_pc + imm_b;
-  wire [31:0] x_normal_next_pc = x_is_mret ? mepc :
-                                  (is_jalr ? jalr_target :
-                                   (is_jal ? jal_target :
-                                    (branch_taken ? branch_target : x_pc_plus_4)));
+  wire        x_redirect = x_is_mret || is_jalr || is_jal || branch_taken;
+  wire [31:0] x_redirect_pc = x_is_mret ? mepc :
+                               (is_jalr ? jalr_target :
+                                (is_jal ? jal_target : branch_target));
   wire [31:0] x_lsu_addr = x_rs1_data + (mem_wen ? imm_s : imm_i);
   wire        branch_target_misaligned = branch_taken && branch_target[1:0] != 2'b00;
   wire        jal_target_misaligned = is_jal && jal_target[1:0] != 2'b00;
@@ -276,7 +276,8 @@ module Core #(
                                   xc_is_ecall ? {27'd0, `NPC_EXC_ECALL_M} :
                                   xc_is_ebreak ? {27'd0, `NPC_EXC_BREAKPOINT} : 32'd0;
   wire [31:0] c_pc_plus_4 = xc_pc + 32'd4;
-  wire [31:0] c_next_pc = c_precise_trap ? mtvec : (c_bad_without_vector ? xc_pc : xc_normal_next_pc);
+  wire [31:0] c_normal_next_pc = xc_redirect ? xc_redirect_pc : c_pc_plus_4;
+  wire [31:0] c_next_pc = c_precise_trap ? mtvec : (c_bad_without_vector ? xc_pc : c_normal_next_pc);
   wire [31:0] c_wb_mux = (xc_wb_sel == `NPC_WB_MEM) ? lsu_rdata :
                          ((xc_wb_sel == `NPC_WB_PC4) ? c_pc_plus_4 :
                           ((xc_wb_sel == `NPC_WB_CSR) ? xc_csr_rdata : xc_alu_result));
@@ -288,8 +289,9 @@ module Core #(
   wire        load_use_stall = c_load_waiting && xc_writes_rd && (c_rs1_match || c_rs2_match);
   wire        c_stage_stall = xc_valid && !c_mem_ready;
   wire        x_can_advance = x_valid && !c_stage_stall && !load_use_stall && (!xc_valid || c_retire_ready);
-  wire        fx_can_accept = !fx_valid || x_can_advance || (c_retire_ready && c_next_pc != c_pc_plus_4);
-  wire        redirect = c_retire_ready && (c_precise_trap || c_bad_without_vector || c_next_pc != c_pc_plus_4 || (c_complete_inst && xc_is_fence_i));
+  wire        redirect = c_retire_ready && (c_precise_trap || c_bad_without_vector || xc_redirect ||
+                                           (c_complete_inst && xc_is_fence_i));
+  wire        fx_can_accept = !fx_valid || x_can_advance || redirect;
   wire        ifu_fetch_valid = !halted && !reset && !fx_valid && !drop_fetch_response && !redirect;
   wire        ifu_invalidate = c_retire_ready && c_complete_inst && xc_is_fence_i;
 
@@ -623,7 +625,8 @@ module Core #(
         xc_rs2_data <= x_rs2_data;
         xc_alu_result <= alu_result;
         xc_lsu_addr <= x_lsu_addr;
-        xc_normal_next_pc <= x_normal_next_pc;
+        xc_redirect <= x_redirect;
+        xc_redirect_pc <= x_redirect_pc;
         xc_is_mret <= x_is_mret;
         xc_is_fence_i <= x_is_fence_i;
         xc_decode_legal <= decode_legal;

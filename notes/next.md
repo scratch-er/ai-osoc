@@ -13,7 +13,7 @@ Current state:
 - Phase 7 (`Instruction Cache and fence.i`) is complete through `P7-S3: Linux migration, final exit check, and Phase 8 preparation`.
 - Phase 8 (`Linux PPA, Optimization, and Spec-Interface Readiness`) is complete through `P8-S3: Closing P8` (validated on Linux; not yet committed — ask the user before any git commit).
 - Phase 9 (`ysyxSoC Integration and AXI Validation`) is closed through `P9-S6: Phase 9 regression and closeout`.
-- Phase 10 (`Pipeline and Targeted Performance Design`) is open after `P10-S4: Regression, PPA check, and optimization note update` on Linux. `npc/rtl/core/Core.v` implements the selected 3-stage elastic in-order pipeline (`F/X/C`) with the P10-S3 area-counter-gate timing/area point, but this is not the final P10 closeout because there are still substantial timing/area/CPI optimizations to do.
+- Phase 10 (`Pipeline and Targeted Performance Design`) is open after the P10-S8 redirect-split optimization on Linux. `npc/rtl/core/Core.v` implements the selected 3-stage elastic in-order pipeline (`F/X/C`) plus the accepted P10 structural optimizations: IFU direct refill, ALU/branch comparator sharing, and split redirect decision/target state. P10-S8 passed spec smoke, directed/DiffTest regression, RT-Thread, and STA to a clean checked `680 MHz` (`690 MHz` fails by about `15 ps`); this is a successful timing/area attempt but still needs user revision before another optimization.
 - Do not modify `AGENTS.md` — it is project-supplied and owned by the user. Record project conventions (such as the `ysyxSoC.patch` workflow) in `notes/` only; the user explicitly reverted an `AGENTS.md` edit for this.
 - The project must remain portable across macOS and Linux. At the start of each future session, detect the current platform and choose commands/toolchain settings from the matching platform note; do not assume either macOS or Linux globally.
 - Platform notes were split out:
@@ -1506,12 +1506,55 @@ Measured result against P10-S6 IFU point:
 
 Interpretation: comparator sharing is an area win but not a timing win. The likely structural reason is that sharing forces branch comparison behind the ALU operand-select mux and gives the comparator a broader fanout context; the old duplicated branch comparator was wasteful but sat directly on `x_rs1_data/x_rs2_data`.
 
+### Attempt 3: split redirect decision from redirect target
+
+Implemented in `npc/rtl/core/Core.v` after user review:
+
+- Replaced `xc_normal_next_pc` with `xc_redirect` plus `xc_redirect_pc`.
+- C stage now computes sequential `pc+4` from `xc_pc` and selects `xc_redirect_pc` only when `xc_redirect` is set.
+- `redirect` now uses the explicit `xc_redirect` control bit instead of a full-width `c_next_pc != c_pc_plus_4` comparison.
+
+Why this was chosen: P10-S7 STA showed the worst endpoint at `xc_normal_next_pc_*`; the old RTL forced branch-taken control into a 32-bit target-vs-`pc+4` mux. The target does not depend on the comparison, only the decision does, so splitting the decision and target is a structural hardware optimization rather than random endpoint editing.
+
+Validation passed:
+
+```sh
+make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke
+make -C npc clean && make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
+  test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest \
+  test-clint test-icache test-fencei test-access-fault \
+  REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+make -C rt-thread-am/bsp/abstract-machine ARCH=riscv32e-npc \
+  AM_HOME=/host/Workspace/ai-ysyx/abstract-machine \
+  CROSS_COMPILE=riscv64-linux-gnu- NPC_MAX_CYCLES=12000000 \
+  NPC_DIFFTEST_REF=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
+```
+
+Representative results:
+
+- Spec smoke: `NPC_SPEC_RESULT status=good reason=uart_eot cycles=57 limit=400`.
+- RT-Thread: `NPC_RESULT status=good reason=good_trap cycles=1807800 insts=511842`.
+
+PPA result against P10-S7 comparator sharing:
+
+| Metric | P10-S7 | P10-S8 redirect split | Delta |
+| --- | ---: | ---: | ---: |
+| Area | `22547.280000` | `22528.520000` | `-18.760000` (`-0.08%`) |
+| `DFFQX1H7L` | `1475` | `1476` | `+1` |
+| Clean checked target | `570 MHz` | `680 MHz` | `+110 MHz` |
+| 580 MHz worst slack | `-0.010 ns` | `+0.260 ns` | `+0.270 ns` |
+| 640 MHz worst slack | `-0.172 ns` | `+0.098 ns` | `+0.270 ns` |
+| 680 MHz worst slack | not checked | `+0.006 ns` | — |
+| 690 MHz worst slack | not checked | `-0.015 ns` | — |
+
+Decision pending user revision: keep P10-S8 unless the user objects. This attempt is successful: it improved timing substantially, slightly reduced area, and did not change the pipeline/CPI policy.
+
 ### Immediate next action
 
-The user accepted the comparator-sharing trade-off. Keep the P10-S7 comparator-sharing point as the current RTL:
+Stop for user revision, as requested. If the user approves continuing, do not immediately make another random STA-driven edit. Re-open the module-level review in `notes/p10-design-review.md` and pick the next optimization by hardware structure. Good candidates after P10-S8:
 
-- Area is lower by about `1.0%` versus P10-S6 IFU.
-- Clean checked frequency is lower (`570 MHz` instead of `580 MHz`), but the area win is accepted.
-- The next optimization should avoid adding more delay to the branch/next-PC critical path; look for area wins outside that path, or specialize X/C packet registers without adding X-stage logic.
+- Area-oriented X/C packet specialization (`xc_rs1_data` only needed for CSR source, `xc_rs2_data` only for store data), but avoid adding new X-stage mux delay.
+- CPI-oriented fetch buffering or AXI arbitration, but only after estimating whether CPI gain offsets area/timing cost.
+- Re-check current STA endpoints first: after P10-S8 the worst max endpoint is `xc_alu_result_20__reg_p:D` at `1.419 ns`, not the removed `xc_normal_next_pc` path.
 
-`notes/p10-design-review.md` contains the full module-by-module hardware-mapping analysis and both attempt results.
+`notes/p10-design-review.md` contains the full module-by-module hardware-mapping analysis and all three attempt results.
