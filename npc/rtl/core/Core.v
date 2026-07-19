@@ -468,7 +468,7 @@ module Core #(
   );
 
   AxiArbiter u_axi_arbiter (
-    .ifu_valid(ifu_bus_valid && !drop_fetch_response),
+    .ifu_valid(ifu_bus_valid),
     .ifu_addr(ifu_bus_addr),
     .ifu_len(ifu_bus_len),
     .ifu_ready(ifu_bus_ready),
@@ -554,10 +554,7 @@ module Core #(
     .mstatus(mstatus)
   );
 
-  Wbu u_wbu (
-    .alu_result(c_wb_mux),
-    .wdata(wb_data)
-  );
+  assign wb_data = c_wb_mux;
 
   always @(posedge clock) begin
     if (reset) begin

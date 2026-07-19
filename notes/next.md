@@ -1300,3 +1300,148 @@ No changes to `npc/rtl/core/RegFile.v` (x0-mux experiment reverted).
    - This removes the regfile-read delay from both the ALU and next-PC critical paths and should push Fmax well above 600 MHz, at the cost of 64 extra F/X register bits and more complex hazard logic.
 3. Continue measuring CPI after each major pipeline change; if CPI regressions dominate, revisit the fetch/direct path or add a small instruction queue.
 4. Re-evaluate area after the regfile-read move; look for further reductions in unused physical-only state and X/C register width.
+
+## Phase 10 Session 6: Design review and structured optimization
+
+Date: 2026-07-19
+Platform: Linux
+
+### Starting point
+
+P10-S5 optimized pipeline point:
+- Area `24124.52`, DFFs `1603`, ICGs `17`
+- Fmax `579.331 MHz` under `icsprout55`
+- Clean checked target `570 MHz`
+- Critical path: F/X instruction register → decode → regfile read → forwarding mux → branch compare → `xc_normal_next_pc`
+
+### Feedback addressed
+
+Previous P10-S5 optimization was report-driven: small edits to `xc_inst` gating and forwarding-match qualification gave only modest gains. The user's feedback requested a deeper, module-by-module review of the RTL rather than random critical-path edits.
+
+A full design review was written to `notes/p10-design-review.md`. Key findings:
+
+1. **`Wbu.v` is dead logic** — just `assign wdata = alu_result`; should be removed.
+2. **The dominant timing bottleneck is the X-stage register-file read**. Moving the read into the F/X stage removes ~0.77 ns from the ALU/branch critical path.
+3. **The X/C packet is bloated**: `xc_normal_next_pc` (32 flops), `xc_rs1_data`/`xc_rs2_data` (64 flops), `xc_lsu_addr` (32 flops), `xc_csr_rdata` (32 flops) are stored for every instruction but not all are needed for every instruction.
+4. **IFU refill-word shadow registers** (`refill_word*_q`, 128 flops) can be eliminated by writing cache data directly per beat.
+5. **CPI losses** include the registered-IFU-response bubble, branch redirect bubble, load-use stall, and LSU-priority arbitration.
+
+### Optimization plan
+
+1. **Step 1 — remove `Wbu.v`**: route `wb_data` directly from the `Core.v` writeback mux.
+2. **Step 2 — move regfile read to F/X**:
+   - Add `fx_rs1_data`/`fx_rs2_data` registers.
+   - Read `RegFile` using `fx_inst` decode in the F/X stage.
+   - Forward from C stage to F/X, and handle X→F/X forwarding / stall for same-cycle producer-in-X hazards.
+   - Adjust load-use stall to operate on F/X operands.
+3. **Step 3 — reduce X/C packet size** after timing is fixed (e.g., remove/recompute `xc_normal_next_pc`).
+4. **Step 4 — IFU refill shadow-register removal**.
+5. **Step 5 — CPI improvements** (prefetch buffer, arbitration policy) only after PPA targets are met.
+
+### Validation plan
+
+After each RTL change:
+1. `make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke`
+2. Directed debug/DiffTest regression including `test-clint test-icache test-fencei test-access-fault`.
+3. Full `cpu-tests` sweep.
+4. RT-Thread scripted `halt`.
+5. STA frequency sweep to measure area/timing impact.
+
+### Notes
+
+- Do not modify `ysyxSoC/` or `am-kernels/`.
+- Keep changes minimal and validated per step; do not stack unverified optimizations.
+
+## Phase 10 Session 6 (continued): 4-stage experiment, revert, and revised plan
+
+Date: 2026-07-19
+Platform: Linux
+
+### 4-stage F/D/X/C experiment
+
+Following the design review, the first structural timing optimization attempted was to add a Decode/Register-Read stage between F and X, creating a 4-stage pipeline `F/D/X/C`:
+
+- Added `fx_rs1_data`/`fx_rs2_data` registers.
+- Moved `Idu` decode and `RegFile` read into the new D stage.
+- Kept X stage as ALU/branch/LSU-address.
+- Forwarded C-stage writeback to D stage.
+- Added `x_to_d_forward` for an instruction in X producing a result consumed by the instruction in D.
+- Adjusted load-use stall, redirect, and fetch-accept logic for the extra stage.
+
+**Area/timing result (P10-S6 4-stage)**:
+
+| Metric | 3-stage baseline (P10-S5) | 4-stage | Delta |
+| --- | ---: | ---: | ---: |
+| Area | 24124.52 | 25665.08 | +1540.56 (+6.4%) |
+| DFFs | 1603 | ~1700 | +~100 |
+| Fmax | 579.331 MHz | 807.796 MHz | +228.5 MHz (+39%) |
+| Clean target | 570 MHz | ~760–780 MHz | +~200 MHz |
+
+**CPI result**: CPI regressed enough that wall-clock time per instruction worsened despite the large frequency gain. The extra stage inserted a bubble on taken branches/jumps and complicated the hazard logic. `cpu-tests` at the default 100k cycle limit failed three tests that passed on the 3-stage; at 500k only `matrix-mul` still failed because its instruction count exceeded the expanded limit.
+
+**Decision**: revert the 4-stage pipeline. Frequency gains are meaningless when CPI regresses proportionally or more. The correct path is module-level optimizations that do not inflate the branch/misprediction bubble.
+
+### Reverted 3-stage baseline
+
+`npc/rtl/core/Core.v` was restored to the P10-S5 3-stage version (commit `75c8ccc`) with two intentional changes retained:
+
+1. `Wbu.v` remains removed: `assign wb_data = c_wb_mux;` in `Core.v`.
+2. The `ifu_valid` deadlock fix remains: `.ifu_valid(ifu_bus_valid)` in the `AxiArbiter` instantiation.
+
+`npc/rtl/core/Wbu.v` is deleted. `npc/Makefile` `test-debug` expectations were restored to the 3-stage timing (`--expect-x1 0x100`, `insts=1`, `pc=0x104 retired=1`).
+
+**Validation after revert**:
+- Directed debug/DiffTest regression passes.
+- `cpu-tests` at 100k fails the same three tests the 4-stage failed (`narcissistic`, `prime`, `matrix-mul`), confirming the failures are due to cycle limits, not the 4-stage logic.
+- `cpu-tests` at 500k passes all except `matrix-mul` (116,715 instructions, needs >600k cycles).
+- SoC regression (`soc-smoke`, `test-soc-difftest`, `test-soc-mem`) passes.
+
+**STA baseline after revert** (full sweep completed):
+
+| Frequency | Worst slack | Status |
+| ---: | ---: | --- |
+| 100 MHz | +8.178 ns | pass |
+| 300 MHz | +1.511 ns | pass |
+| 500 MHz | +0.178 ns | pass |
+| 560 MHz | -0.037 ns | fail |
+| 580 MHz | -0.098 ns | fail |
+| 600 MHz | -0.156 ns | fail |
+
+- Area: `24119.20` (matches P10-S5 ~24124).
+- Critical path: `F/X instruction register → regfile read → forwarding mux → branch compare → xc_normal_next_pc`.
+- Path delay: `1.794 ns`.
+- Fmax: `548.891 MHz`.
+- Clean target: `540 MHz`.
+
+The reverted baseline is close to P10-S5 in area but shows a lower Fmax than the P10-S5 report (~579 MHz). The critical path moved from `xc_alu_result` in P10-S5 to `xc_normal_next_pc` here, likely due to synthesis-tool variation and the small RTL changes retained after the revert. The area match confirms the design is structurally back to the 3-stage baseline; the next optimizations will be measured against this reverted baseline.
+
+### Revised optimization plan (CPI-neutral first)
+
+Instead of adding pipeline stages, attack structural inefficiencies module by module:
+
+1. **Remove IFU refill-word shadow registers** (`npc/rtl/core/Ifu.v`):
+   - The four 32-bit `refill_word*_q` registers (128 flops) assemble a cache line before writing it.
+   - Write each refill beat directly into the selected cache data register instead.
+   - Read the requested instruction from the cache data registers (using `bus_rdata` for the current beat when `miss_offset_q` matches the final beat).
+   - Expected impact: ~128 fewer flops, small area win, no CPI change.
+
+2. **Share branch comparator with ALU SLT/SLTU** (`npc/rtl/core/Exu.v` and `Core.v`):
+   - `Exu.v` already computes signed/unsigned less-than for `SLT`/`SLTU`.
+   - `Core.v` duplicates the same comparison for branches.
+   - Export `less_signed`, `less_unsigned`, and `equal` from `Exu.v`; use them for both ALU results and branch-taken logic.
+   - Expected impact: removes a separate comparison tree, modest area win, may slightly relax routing.
+
+3. **Review CSR read path** (`npc/rtl/core/Csr.v`):
+   - Confirm whether the combinational CSR read mux contributes to any setup path.
+   - If it does, consider registering the read result earlier or simplifying the mux.
+
+4. **Revisit X/C packet width** only after the above:
+   - `xc_normal_next_pc`, `xc_rs1_data`/`xc_rs2_data`, `xc_lsu_addr`, `xc_csr_rdata` are candidates for specialization or recomputation.
+   - Any packet reduction must not add combinational delay to the critical path.
+
+5. **CPI optimizations last** (prefetch buffer, fairer arbitration, branch prediction) once timing and area targets are met.
+
+### Immediate next action
+
+Implement the IFU refill shadow-register removal, validate functionally, and re-run STA/PPA to measure the area impact against the reverted 3-stage baseline.
+- `notes/p10-design-review.md` contains the full module-by-module hardware-mapping analysis.

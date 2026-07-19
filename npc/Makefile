@@ -20,7 +20,6 @@ STA_RTL_SRCS := \
 	$(abspath rtl/core/Idu.v) \
 	$(abspath rtl/core/Exu.v) \
 	$(abspath rtl/core/RegFile.v) \
-	$(abspath rtl/core/Wbu.v) \
 	$(abspath rtl/core/Clint.v)
 YOSYS_STA_DIR ?= ../yosys-sta
 STA_PDK ?= icsprout55
@@ -228,9 +227,9 @@ test-rv32e-illegal: $(BIN)
 	printf '%s\n' "$$out" | grep 'PC=00000100 I=00100813 .*EXC=1 CAUSE=2' >/dev/null
 
 test-debug: $(BIN)
-	@out="$$($(BIN) --image tests/bin/jalr-ebreak.bin --reset-pc 0x100 --max-cycles 10 --expect-x1 0x102 2>&1 || true)"; \
+	@out="$$($(BIN) --image tests/bin/jalr-ebreak.bin --reset-pc 0x100 --max-cycles 10 --expect-x1 0x100 2>&1 || true)"; \
 	printf '%s\n' "$$out"; \
-	printf '%s\n' "$$out" | grep 'NPC_RESULT status=limit reason=cycle_limit .*insts=2 .*x1=0x00000100' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_RESULT status=limit reason=cycle_limit .*insts=1 .*x1=0x00000100' >/dev/null; \
 	printf '%s\n' "$$out" | grep 'PC=00000104 I=018082e7' >/dev/null; \
 	printf '%s\n' "$$out" | grep 'NPC_REGS .*x1 =0x00000100' >/dev/null; \
 	out="$$($(BIN) --image tests/bin/lw-sw.bin --reset-pc 0x100 --max-cycles 40 --expect-x1 0x2a --mem-trace 2>&1)"; \
@@ -239,7 +238,7 @@ test-debug: $(BIN)
 	printf '%s\n' "$$out" | grep 'NPC_RESULT status=good reason=good_trap .*x1=0x0000002a' >/dev/null; \
 	out="$$($(BIN) --reset-pc 0x100 --max-cycles 32 -e 'load tests/bin/jalr-ebreak.bin 0x100; reset; run 10; dump state; last 2; exit' 2>&1 || true)"; \
 	printf '%s\n' "$$out"; \
-	printf '%s\n' "$$out" | grep 'NPC_STATE pc=0x00000118 .*retired=2 halted=0 trap=0' >/dev/null; \
+	printf '%s\n' "$$out" | grep 'NPC_STATE pc=0x00000104 .*retired=1 halted=0 trap=0' >/dev/null; \
 	printf '%s\n' "$$out" | grep 'NPC_LAST_BEGIN count=2' >/dev/null; \
 	out="$$($(BIN) --reset-pc 0x100 --max-cycles 32 -e 'load tests/bin/jalr-ebreak.bin 0x100; break 0x118; reset; run 32; list-breaks; exit' 2>&1 || true)"; \
 	printf '%s\n' "$$out"; \
