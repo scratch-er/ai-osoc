@@ -13,7 +13,7 @@ Current state:
 - Phase 7 (`Instruction Cache and fence.i`) is complete through `P7-S3: Linux migration, final exit check, and Phase 8 preparation`.
 - Phase 8 (`Linux PPA, Optimization, and Spec-Interface Readiness`) is complete through `P8-S3: Closing P8` (validated on Linux; not yet committed — ask the user before any git commit).
 - Phase 9 (`ysyxSoC Integration and AXI Validation`) is closed through `P9-S6: Phase 9 regression and closeout`.
-- Phase 10 (`Pipeline and Targeted Performance Design`) is complete through `P10-S2: Implement and smoke test` on macOS. `npc/rtl/core/Core.v` now implements the selected 3-stage elastic in-order pipeline (`F/X/C`). Per user request, this session did not connect to ysyxSoC and did not run STA. Do not commit yet; the user wants to revise and make the commit.
+- Phase 10 (`Pipeline and Targeted Performance Design`) is open after `P10-S4: Regression, PPA check, and optimization note update` on Linux. `npc/rtl/core/Core.v` implements the selected 3-stage elastic in-order pipeline (`F/X/C`) with the P10-S3 area-counter-gate timing/area point, but this is not the final P10 closeout because there are still substantial timing/area/CPI optimizations to do.
 - Do not modify `AGENTS.md` — it is project-supplied and owned by the user. Record project conventions (such as the `ysyxSoC.patch` workflow) in `notes/` only; the user explicitly reverted an `AGENTS.md` edit for this.
 - The project must remain portable across macOS and Linux. At the start of each future session, detect the current platform and choose commands/toolchain settings from the matching platform note; do not assume either macOS or Linux globally.
 - Platform notes were split out:
@@ -1074,14 +1074,104 @@ make -C rt-thread-am/bsp/abstract-machine ARCH=riscv32e-npc \
   NPC_DIFFTEST_REF=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so run
 ```
 
+## Phase 10 Session 4 status
+
+`P10-S4: Regression, PPA check, and optimization note update` is complete on the Linux host. This is not a Phase 10 closeout; the current P10-S3 area-counter-gate RTL point is validated and measured, but more timing/area/CPI optimization remains.
+
+Validation completed:
+
+1. Default NPC directed/DiffTest regression passed after a clean debug rebuild:
+
+```sh
+make -C npc clean && make -C npc smoke test-addi test-jalr-ebreak test-lw-sw test-alu \
+  test-mem-size test-rv32e-illegal test-csr-trap test-debug test-difftest \
+  test-clint test-icache test-fencei test-access-fault \
+  REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+```
+
+Representative final lines include `test-clint` `NPC_RESULT status=good reason=good_trap cycles=69 insts=19`, `test-icache` `cycles=58 insts=19`, and `test-fencei` `cycles=54 insts=9`.
+
+2. Spec-mode smoke passed:
+
+```sh
+make -C npc clean && make -C npc NPC_DEBUG=0 spec-smoke
+```
+
+Output included `SPEC` and `NPC_SPEC_RESULT status=good reason=uart_eot cycles=57 limit=400`.
+
+3. Full 35-test `cpu-tests` sweep with NEMU event DiffTest passed using Linux `CROSS_COMPILE=riscv64-linux-gnu-` and logs under `build/p10-close-tests/`:
+
+`add`, `add-longlong`, `bit`, `bubble-sort`, `crc32`, `div`, `dummy`, `fact`, `fib`, `goldbach`, `hello-str`, `if-else`, `leap-year`, `load-store`, `matrix-mul`, `max`, `mersenne`, `min3`, `mov-c`, `movsx`, `mul-longlong`, `narcissistic`, `pascal`, `prime`, `quick-sort`, `recursion`, `select-sort`, `shift`, `string`, `sub-longlong`, `sum`, `switch`, `to-lower-case`, `unalign`, `wanshu`.
+
+Representative counters:
+
+- `sum`: `NPC_RESULT status=good reason=good_trap cycles=1434 insts=528`; `NPC_ICACHE ... hit_rate_x1000=979 amat_x1000=1132`.
+- `string`: `cycles=4069 insts=1449`; `hit_rate_x1000=951 amat_x1000=1310`.
+- `crc32`: `cycles=66820 insts=18163`; `hit_rate_x1000=740 amat_x1000=2586`.
+- `quick-sort`: `cycles=11859 insts=3041`; `hit_rate_x1000=758 amat_x1000=2531`.
+- `matrix-mul`: `cycles=564293 insts=131726`; `hit_rate_x1000=660 amat_x1000=3055`.
+
+4. Required workloads passed / bounded as expected:
+
+- AM `hello`: printed `Hello, AbstractMachine!`; `NEMU_RESULT status=good ... insts=465`; `NPC_RESULT status=good reason=good_trap cycles=2153 insts=465`; `NPC_ICACHE ... hit_rate_x1000=638 amat_x1000=3176`.
+- RT-Thread scripted shell `halt`: output included `msh />halt`; `NEMU_RESULT status=good ... insts=511842`; `NPC_RESULT status=good reason=good_trap cycles=1807788 insts=511842`; `NPC_ICACHE ... hit_rate_x1000=838 amat_x1000=2019`.
+- CoreMark default `ITERATIONS=1000`: bounded performance smoke only, reached `NPC_RESULT status=limit reason=cycle_limit cycles=120000000 insts=27877841`; `NPC_ICACHE ... hit_rate_x1000=676 amat_x1000=2991`.
+
+5. SoC regression passed:
+
+```sh
+make -C npc soc-smoke test-soc-difftest test-soc-mem \
+  REF_SO=/host/Workspace/ai-ysyx/nemu/build/riscv32-nemu-interpreter-so
+```
+
+Representative results:
+
+- `soc-smoke`: printed `SOC`, then expected cycle limit: `NPC_RESULT status=limit reason=cycle_limit cycles=2000 insts=653`.
+- `test-soc-difftest`: `NEMU_RESULT status=good ... insts=19`; `NPC_RESULT status=good reason=good_trap cycles=73 insts=19 pc=0x20000010`; `NPC_ICACHE ... hit_rate_x1000=894 amat_x1000=1947`.
+- `test-soc-mem`: printed `PASS`; `NEMU_RESULT status=good ... insts=26702`; `NPC_RESULT status=good reason=good_trap cycles=98706 insts=26702 pc=0x20000198`; `NPC_ICACHE ... hit_rate_x1000=845 amat_x1000=2388`.
+
+6. AM SoC workloads passed with DiffTest:
+
+- `riscv32e-ysyxsoc` `dummy`: `NEMU_RESULT status=good state=2 halt_pc=0x20000060 halt_ret=0 insts=25`; `NPC_RESULT status=good reason=good_trap cycles=162 insts=25 pc=0x20000060`; `NPC_ICACHE ... hit_rate_x1000=640 amat_x1000=4480`.
+- `riscv32e-ysyxsoc` `hello`: printed `Hello, AbstractMachine!` and `mainargs = ''.`; `NEMU_RESULT status=good state=2 halt_pc=0x20000108 halt_ret=0 insts=1344`; `NPC_RESULT status=good reason=good_trap cycles=6298 insts=1344 pc=0x20000108`; `NPC_ICACHE ... hit_rate_x1000=814 amat_x1000=2786`.
+
+PPA / timing recheck:
+
+- Output root: `build/p10-close-ppa/final-phys/`.
+- Current measured point: P10-S3 area-counter-gate physical RTL (`NPC_DEBUG=0`, physical top, `icsprout55`).
+- Area: `24273.200000`.
+- Sequential area: `9874.480000` (`40.68%`).
+- DFFs: `1603`; ICGs: `17`.
+- Reported Fmax: `562.903 MHz`.
+- Checked sweep:
+  - `560 MHz`: slack `+0.008 ns`.
+  - `562 MHz`: slack `+0.002 ns`.
+  - `563 MHz`: slack `-0.001 ns`.
+  - `570 MHz`: slack `-0.023 ns`.
+  - `600 MHz`: slack `-0.111 ns`.
+- Worst endpoint: `u_core.xc_normal_next_pc_7__reg_p:D`; worst path delay `1.730 ns`.
+- iEDA power remains a rough toggle-based standalone estimate; for example `560 MHz` reported `1.58286 W`, `600 MHz` `1.64676 W`, and `1100 MHz` `2.44051 W`. Treat this like the P8 note: useful only as a relative early estimate because many SoC-facing nets are unloaded/no-load in standalone STA.
+
+Timing/area optimization record:
+
+- Initial P10-S2 pipeline STA on Linux exposed a timing-hostile unregistered IFU direct-response path: IFU hit/refill data and tag comparison fed directly through decode/regfile/ALU/next-PC logic into `X/C` packet registers such as `xc_alu_result` and `xc_normal_next_pc`. That point had area `25971.120000`, `1625` DFFs, worst path delay about `2.182 ns`, reported Fmax about `449.147 MHz`, and failed `500 MHz` by `-0.226 ns`.
+- Timing optimization: remove the IFU-to-X/C direct-response bypass (`x_direct_valid`) so every fetch response is captured in the `F/X` register before decode/execute. This cut the critical IFU->X/C cone and moved the optimized point to area `25376.400000`, `1633` DFFs, worst path delay `1.558 ns`, reported Fmax `623.649 MHz`, clean checked `600 MHz`, first failing checked `650 MHz`.
+- Area optimization: wrap the 64-bit icache performance counters in `NPC_DEBUG` so physical `NPC_DEBUG=0` synthesis drops debug-only counter flops/adders while debug simulation still prints `NPC_ICACHE`. This reduced area to `24273.200000` and DFFs to `1603`, at the cost of settling at the current reported Fmax `562.903 MHz`.
+- Rejected optimization: physical-only `xc_inst` packet trimming reduced area to about `24200`, but worsened the 600 MHz timing path to about `-0.105 ns`, so `xc_inst` remains registered in physical mode.
+
+Comparison / interpretation:
+
+- Against P8-S3 single-cycle-like baseline: area increased `22685.320000 -> 24273.200000` (`+1587.88`, about `+7.0%`), sequential area increased `8001.840000 -> 9874.480000`, DFFs increased `1299 -> 1603`, and standalone Fmax decreased from reported `614.531 MHz` to `562.903 MHz`.
+- Workload CPI is mixed after the P10-S3 area/timing changes: RT-Thread is still slightly better than P8-S3 (`1807788` vs `1816964` cycles), but `hello` and several representative `cpu-tests` are not a clear win versus P8-S3.
+- Do not close P10 from this point. Continue optimizing from measured bottlenecks: next-PC/X-C packet timing, CPI lost to the registered fetch path, branch/redirect penalty, load-use behavior, and physical-only state/fanout.
+
 Current working tree notes:
 
-- Intended P10-S3 source changes now include `npc/rtl/core/Core.v`, `npc/rtl/core/Ifu.v`, `npc/Makefile`, `notes/plan.md`, `notes/next.md`.
-- Current area-counter-gate source delta is only the `Ifu.v` physical/debug counter guard on top of the earlier P10-S3 changes. Build output under `npc/build/` and STA output under `build/p10-s3-*` are generated artifacts; inspect before committing.
-- `ysyxSoC` still appears modified as a submodule from prior P9 work; do not commit inside it.
+- Intended P10 source changes include `npc/rtl/core/Core.v`, `npc/rtl/core/Ifu.v`, `npc/Makefile`, `notes/plan.md`, and `notes/next.md`.
+- Generated outputs under `npc/build/`, `build/p10-close-tests/`, and `build/p10-close-ppa/` should not be committed unless explicitly desired.
+- `ysyxSoC` still appears modified as a submodule from prior P9 work; do not commit inside it. Keep using the root `ysyxSoC.patch` workflow.
 
 Next steps:
 
-1. P10-S4 final regression remains: full `cpu-tests`, SoC `test-soc-difftest`, SoC `test-soc-mem`, and AM `riscv32e-ysyxsoc` `dummy`/`hello`.
-2. If CPI becomes the main issue, consider a registered fast fetch path or selective direct-hit optimization, but do not restore the unregistered IFU-to-X/C cone without STA evidence.
-3. Ask the user before any git commit.
+1. Commit the validated P10 pipeline/timing-area checkpoint now, per user request.
+2. Continue P10 optimization after the commit. Start from measured bottlenecks: next-PC/X-C packet timing, CPI lost to the registered fetch path, branch/redirect penalty, load-use behavior, and physical-only state/fanout.

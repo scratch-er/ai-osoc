@@ -859,15 +859,20 @@ Tasks:
    - Optimized physical result: area `25376.400000` (-`594.720000`, -2.29% vs P10-S2 pipeline), `1633` DFFs (+8), worst path `1.558 ns`, reported Fmax `623.649 MHz`, clean checked `600 MHz`, first failing checked `650 MHz`.
    - Performance tradeoff is mixed but acceptable for timing/area: `hello` became `2153` cycles versus P10-S2 `1985` and P8-S3 `2116`, while RT-Thread stayed better than the P8-S3 baseline at `1807788` cycles versus P8-S3 `1816964` (but slower than P10-S2 `1724877`). Keep this only because it removes the measured critical path and reduces area; revisit with a better registered fast path only if workload CPI becomes the bottleneck.
    - Validation passed: spec smoke in `NPC_DEBUG=0`, directed/DiffTest checks through access-fault/CLINT/DiffTest, AM `hello`, and RT-Thread scripted `halt` with NEMU event DiffTest. SoC validation remains for P10-S4.
-4. **P10-S4: Final test and close** — planned
-   - Run the full functional suite: `test-difftest`, all 35 `cpu-tests`, `hello`, RT-Thread scripted `halt`, SoC `test-soc-difftest`, SoC `test-soc-mem`, and AM `riscv32e-ysyxsoc` `dummy`/`hello`.
-   - Record final timing/PPA/performance results and remaining caveats in `notes/plan.md`, `notes/next.md`, and a Phase 10 timing note if the result is substantial.
-   - Commit the Phase 10 notes/RTL changes after final regression.
+4. **P10-S4: Regression, PPA check, and optimization note update** — completed on Linux
+   - Re-ran the broad validation suite with Linux `CROSS_COMPILE=riscv64-linux-gnu-`: default directed NPC/DiffTest regression, all 35 `cpu-tests`, AM `hello`, RT-Thread scripted `halt`, bounded default CoreMark, SoC `soc-smoke` / `test-soc-difftest` / `test-soc-mem`, and AM `riscv32e-ysyxsoc` `dummy` / `hello`.
+   - Rechecked the P10-S3 area-counter-gate physical PPA under `icsprout55`: area `24273.200000`, sequential area `9874.480000`, `1603` DFFs, `17` ICGs, reported Fmax `562.903 MHz`; checked `562 MHz` passes with `+0.002 ns`, `563 MHz` fails by about `-0.001 ns`.
+   - Recorded the timing/area optimization path: first measure showed the unregistered IFU direct-hit/direct-response path limiting Fmax to about `449 MHz`; removing that bypass pushed the timing point to `623.649 MHz` at area `25376.400000`; gating physical-only icache counters reduced area to `24273.200000` and `1603` DFFs while settling at the current `562.903 MHz` timing point.
+   - Representative measured performance at the current point: `hello` `2153` cycles / `465` insts; `sum` `1434` cycles / `528` insts; `string` `4069` cycles / `1449` insts; `crc32` `66820` cycles / `18163` insts; `quick-sort` `11859` cycles / `3041` insts; `matrix-mul` `564293` cycles / `131726` insts; RT-Thread `1807788` cycles / `511842` insts; default CoreMark remains bounded at `120000000` cycles.
+   - Status: P10 is not closed. Compared with the P8-S3 single-cycle-like baseline, area/reg count increased (`22685.320000` -> `24273.200000`, `1299` -> `1603` DFFs), Fmax decreased (`~614.531` -> `562.903 MHz`), and CPI is mixed. Continue optimizing measured bottlenecks instead of adding stages by habit.
+5. **P10-S5: Continue targeted PPA optimization** — planned
+   - Start from current measured bottlenecks: next-PC/X-C packet timing, fetch-transfer bubble, branch/redirect penalty, load-use behavior, and physical-only state/fanout.
+   - Preserve the full validation suite from P10-S4 as the regression gate for any optimization.
 
 Exit criteria:
 
-- The selected 3-stage pipeline passes the same functional suite as the P8/P9 baseline, including DiffTest and ysyxSoC smoke/memory tests.
-- Performance gain is measured and justified against area, register count, and timing cost.
+- The selected 3-stage pipeline passes the same functional suite as the P8/P9 baseline, including DiffTest and ysyxSoC smoke/memory tests. Current P10-S4 point passes, but keep revalidating after further P10 optimizations.
+- Performance gain is measured and justified against area, register count, and timing cost. Not yet satisfied as a phase-close criterion; the current point is a measured tradeoff, not a clear PPA win over P8-S3.
 - Any decision to split further into 4 stages, add early redirect, or add load-result forwarding is backed by measured bottlenecks rather than classic-design habit.
 
 ## Phase 11: Final Integration and Documentation
